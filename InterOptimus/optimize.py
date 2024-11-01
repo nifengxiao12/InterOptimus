@@ -9,26 +9,26 @@ import pandas as pd
 import sys
 import time
 from tqdm.notebook import tqdm
-from CNID import calculate_cnid_in_supercell
+from InterOptimus.CNID import calculate_cnid_in_supercell
 from dscribe.descriptors import SOAP
 from pymatgen.core.periodic_table import Element
 from skopt import gp_minimize
 from skopt.space import Real
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
-from MPsoap import to_ase, get_min_nb_distance, soap_data_generator, get_EN_diff_interface
+from InterOptimus.MPsoap import to_ase, get_min_nb_distance, soap_data_generator, get_EN_diff_interface
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
-from matching import interface_searching
+from InterOptimus.matching import interface_searching
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.core.structure import Structure
-from equi_term import get_non_identical_slab_pairs
-from matching import sort_list, get_area_match
+from InterOptimus.equi_term import get_non_identical_slab_pairs
+from InterOptimus.matching import sort_list, get_area_match
 import pickle
 from scipy.stats import pearsonr
 from scipy.stats.mstats import spearmanr
 from skopt.space import Real, Integer
 import math
-from VaspWorkFlow import RegistrationScan
-from tool import get_one_interface, read_key_item, get_it_core_indices
+from InterOptimus.VaspWorkFlow import RegistrationScan
+from InterOptimus.tool import get_one_interface, read_key_item, get_it_core_indices
 
 class interface_pre_optimizer:
     """
@@ -264,19 +264,9 @@ class WorkPatcher:
     def from_dir(cls, dir):
         with open(f"{dir}/unique_matches.pkl", "rb") as f:
             unique_matches = pickle.load(f)
-            
-        try:
-            with open(f"{dir}/soap_data.pkl", "rb") as f:
-                soap_data = pickle.load(f)
-        except:
-            soap_data = None
-
-        with open(f"{dir}/film.pkl", "rb") as f:
-            film = pickle.load(f)
-
-        with open(f"{dir}/substrate.pkl", "rb") as f:
-            substrate = pickle.load(f)
-        return cls(unique_matches, soap_data, film, substrate)
+        film = Structure.from_file('FLM.cif').get_primitive_structure()
+        substrate = Structure.from_file('SBS.cif').get_primitive_structure()
+        return cls(unique_matches, None, film, substrate)
         
     def param_parse(self, project_name, termination_ftol, slab_length, c_periodic = False, vacuum_over_film = 0.01, \
                  rpsv_pow = {'c':1, 'd':1, 'm':20, 'rho':0.7}, kernel_factors = {'soap':1, 'rp':1, 'en':1}):
@@ -345,7 +335,7 @@ class WorkPatcher:
                                     vacuum_over_film = self.vacuum_over_film)
                                     
         if scan_method['method'] == 'BO':
-            from VaspWorkFlow import RegistrationStaticScanWorkFlow_BO
+            from InterOptimus.VaspWorkFlow import RegistrationStaticScanWorkFlow_BO
             result = registration_minimizer(itopt, scan_method['params']['n_calls'])
             with open('site_data_BO.pkl', 'wb') as f:
                 pickle.dump(itopt.op_data, f)
@@ -357,7 +347,7 @@ class WorkPatcher:
             db_file = db_file, vasp_cmd = vasp_cmd, savefile = savefile)
             
         elif scan_method['method'] == 'grid':
-            from VaspWorkFlow import RegistrationStaticScanWorkFlow_grid
+            from InterOptimus.VaspWorkFlow import RegistrationStaticScanWorkFlow_grid
             return RegistrationStaticScanWorkFlow_grid(itopt, scan_method['params']['density'],
              f"{self.project_name}", \
              NCORE = NCORE, \
@@ -713,10 +703,22 @@ class interface_score_ranker:
 def read_pickle(file):
     with open(file, 'rb') as f:
         return pickle.load(f)
-        
+
+def calculate_correlation(scores, energies):
+    sp_correlation_all, _ = pearsonr(scores, energies)
+    n = len(scores)
+    highest_20_ids = argsort(energies)[arange(int(n/2))]
+    scores_high = scores[highest_20_ids]
+    energies_high_score = energies[highest_20_ids]
+    sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
+    correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
+    if math.isnan(correlation):
+        correlation = 0
+    return correlation
+
 class HPtrainer:
     def __init__(self, substrate_conv, film_conv, sub_analyzer, DFT_results, slab_length = 5, termination_ftol = 0.1, \
-                 vacuum_over_film = 10, c_period = False, structure_from_MP = True):
+                 vacuum_over_film = 10, c_period = False, structure_from_MP = True, training_y = 'binding_energies'):
         self.substrate_conv = substrate_conv
         self.film_conv = film_conv
         self.sub_analyzer = sub_analyzer
@@ -734,6 +736,7 @@ class HPtrainer:
         self.wp_initial.param_parse(project_name = 'THP', termination_ftol = self.termination_ftol, slab_length = self.slab_length, \
                        c_periodic = self.c_period, vacuum_over_film = self.vacuum_over_film)
         self.all_unique_terminations = self.wp_initial.get_all_unique_terminations()
+        self.training_y = training_y
 
     def trial(self, params):
         rcut, n_max, l_max, soapWr0, soapWc, soapWd, soapWm, KFsoap, KFrp, KFen, rpPOWc, rpPOWd, rpPOWm, rpPOWrho = params
@@ -744,28 +747,38 @@ class HPtrainer:
                        c_periodic = self.c_period, vacuum_over_film = self.vacuum_over_film,
                        rpsv_pow = {'c':rpPOWc, 'd':rpPOWd, 'm':rpPOWm, 'rho':rpPOWrho}, kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen})
         wp.all_unique_terminations = self.all_unique_terminations
-        scores = []
-        energies = []
-        distance_shifts = []
-        energies_rank_by_score = []
-        for i in self.DFT_results.keys():
-            scores += wp.score_interfaces(i[0], i[1], self.DFT_results[i]['xyzs'])
-            energies += list(self.DFT_results[i]['energies'])
-        scores = array(scores)
-        energies = array(energies)
-        sp_correlation_all, _ = pearsonr(scores, energies)
-        n = len(list(self.DFT_results.keys()))
-        highest_20_ids = argsort(energies)[arange(int(n/2))]
-        scores_high = scores[highest_20_ids]
-        energies_high_score = energies[highest_20_ids]
-        sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
-        correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
-        #correlation = sp_correlation_all
-        print(params)
-        if math.isnan(correlation):
-            correlation = 0
-        print(correlation)
-        return correlation
+        if self.training_y == 'binding_energies':
+            scores = []
+            energies = []
+            for i in self.DFT_results.keys():
+                scores += wp.score_interfaces(i[0], i[1], self.DFT_results[i]['xyzs'])
+                energies += list(self.DFT_results[i][self.training_y])
+            scores = array(scores)
+            energies = array(energies)
+            return calculate_correlation(scores, energies)
+        else:
+            dictarray = array(list(self.DFT_results.keys()))
+            unique_match_ids = unique(dictarray[:,0])
+            key_list = list(self.DFT_results.keys())
+            correlations = []
+            weightings = []
+            for i in unique_match_ids:
+                #each unique id, optimize for all the terminations
+                keys_with_this_id = where(dictarray[:,0] == i)[0]
+                scores = []
+                energies = []
+                num_this_match = 0
+                for j in keys_with_this_id:
+                    k = key_list[j]
+                    scores += wp.score_interfaces(k[0], k[1], self.DFT_results[k]['xyzs'])
+                    energies += list(self.DFT_results[k][self.training_y])
+                    num_this_match += len(scores)
+                scores = array(scores)
+                energies = array(energies)
+                weightings.append(num_this_match)
+                correlations.append(calculate_correlation(scores, energies))
+                weightings, correlations = array(weightings), array(correlations)
+            return sum(weightings * correlations) / sum(weightings)
 
 def HPoptimizer(hptrainer, n_calls):
     def trial_with_progress(func, n_calls, *args, **kwargs):

@@ -16,6 +16,7 @@ from scipy.spatial.distance import pdist
 from tqdm import tqdm
 import pickle
 import time
+from InterOptimus.tool import read_key_item
 
 def get_Z(struct):
     """given structure, get element names.
@@ -133,7 +134,6 @@ class soap_data_generator:
     """
     @classmethod
     def from_dir(cls):
-        from core import read_key_item
         set_data = read_key_item('INTAR')
         substrate_conv = Structure.from_file('SBS.cif')
         film_conv = Structure.from_file('FLM.cif')

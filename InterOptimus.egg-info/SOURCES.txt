@@ -1,0 +1,8 @@
+LICENSE
+README.md
+setup.py
+InterOptimus.egg-info/PKG-INFO
+InterOptimus.egg-info/SOURCES.txt
+InterOptimus.egg-info/dependency_links.txt
+InterOptimus.egg-info/requires.txt
+InterOptimus.egg-info/top_level.txt

@@ -5,7 +5,7 @@ results from pymatgen's SubstrateAnalyzer
 
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
-from equi_term import get_non_identical_slab_pairs
+from InterOptimus.equi_term import get_non_identical_slab_pairs
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -19,7 +19,7 @@ from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 #from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 #from MPsoap import to_ase
-from equi_term import pair_fit
+from InterOptimus.equi_term import pair_fit
 import matplotlib.pyplot as plt
 from adjustText import adjust_text
 

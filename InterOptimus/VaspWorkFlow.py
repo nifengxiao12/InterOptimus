@@ -5,15 +5,16 @@ from atomate.vasp.firetasks.parse_outputs import VaspToDb
 from pymatgen.io.vasp.inputs import Potcar
 from pymatgen.io.vasp.sets import MPRelaxSet, MPStaticSet
 from pymatgen.analysis.interfaces.coherent_interfaces import get_rot_3d_for_2d
+from pymatgen.core.structure import Structure
 from scipy.linalg import polar
-from CNID import calculate_cnid_in_supercell
+from InterOptimus.CNID import calculate_cnid_in_supercell
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from numpy import arange, ceil, savetxt, dot, meshgrid, array
-from numpy.linalg import norm
+from numpy.linalg import norm, inv
 import pickle
 import shutil
 import os
-from tool import get_one_interface
+from InterOptimus.tool import get_one_interface, trans_to_bottom, add_sele_dyn, add_sele_dyn_slab
 
 def get_potcar_dict():
     return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu_pv', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu', 'F': 'F', 'Fe': 'Fe_pv', 'Ga': 'Ga_d', 'Gd': 'Gd', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn', 'Mo': 'Mo_pv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_pv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os_pv', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re_pv', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
@@ -21,7 +22,7 @@ def get_potcar_dict():
 def get_potcar(structure):
     return Potcar([get_potcar_dict()[i.symbol] for i in structure.elements])
 
-def CstRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, Kdense = 1000):
+def CstRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, Kdense = 500):
     potcar = get_potcar(structure)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)
     custom_encut = max_encut * ENCUT_scale
@@ -106,7 +107,7 @@ def ITStaticSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, EDIFF = 1
     return MPStaticSet(structure, user_incar_settings = user_incar_settings, \
     user_potcar_functional='PBE_54', user_potcar_settings = get_potcar_dict(), user_kpoints_settings = {'reciprocal_density': Kdense})
     
-def get_initial_film(interface):
+def get_initial_film(interface, match):
     """
     get the non-deformed film
     """
@@ -114,11 +115,28 @@ def get_initial_film(interface):
     film_vs0 = interface.interface_properties['film_sl_vectors']
     sub_vs1 = interface.lattice.matrix[:2]
     R1 = get_rot_3d_for_2d(sub_vs0, sub_vs1)
-    original_trans = cib.zsl_matches[0].match_transformation
+    original_trans = match.match_transformation
     R0, T = polar(original_trans)
+    R = dot(R1, R0)
     strain_inv = dot(dot(R, inv(T)), inv(R))
-    new_lattice = np.dot(strain_inv, interface.lattice.matrix.T).T
+    print(strain_inv)
+    new_lattice = dot(strain_inv, interface.lattice.matrix.T).T
     return Structure(new_lattice, interface.film.species, interface.film.frac_coords)
+
+def NDPDPWF(structure, project_name, NCORE, db_file, vasp_cmd, additional_fields, spec, incar_update):
+    fw1 = Firework(
+    tasks=[
+        WriteVaspFromIOSet(vasp_input_set=ITStaticSet(structure = structure, NCORE = NCORE, LDIPOL = False, EDIFF = 1e-4), structure = structure),
+        RunVaspCustodian(vasp_cmd = vasp_cmd, handler_group = "no_handler", gzip_output = False)
+    ], name = f'{project_name}_NDP', spec=spec)
+    #dipole correction
+    fw2 = Firework(
+    tasks=[
+        ModifyIncar(incar_update = incar_update),
+        RunVaspCustodian(vasp_cmd = vasp_cmd, handler_group = "no_handler", gzip_output = False),
+        VaspToDb(db_file = db_file, additional_fields = additional_fields)
+    ], name = f'{project_name}_DP', parents = fw1, spec=spec)
+    return fw1, fw2
 
 def get_film_c_length(interface, in_unit_planes):
     """
@@ -136,63 +154,52 @@ def get_film_c_length(interface, in_unit_planes):
         )
     return norm(film_sg.get_slab(shift = 0).get_orthogonal_c_slab().lattice.matrix[2]) - 1e-16
 
-def SlabEnergyWorkflows(self, interface, unique_match_idx, project_name, user_spec_sets = None):
+def readDBvasp(db, field):
+    data = db.collection.find_one(field)
+    energy = np.inf
+    if data != None:
+        if data['state'] == 'successful':
+            energy = data['output']['energy']
+    return energy
+
+def SlabEnergyWorkflows(interface, match, project_name, NCORE, db_file, vasp_cmd, relax = False, calc_initial_film = False):
     """
     work flow to calculate slab energy
     """
-    spec = {"_nodes": 1, \
-    "_ntasks_per_node": 64, \
-    "_queue": "standard", \
-    "_vasp_version":"6.4.3-optcell",\
-    "_category":"vasp"}
-    if user_spec_sets != None:
-        for i in user_spec_sets.keys():
-            spec[i] = user_spec_sets[i]
-    film_slab = interface.film
-    substrate_slab = interface.substrate
-    film0_slab = get_initial_film(interface)
+    if project_name not in os.listdir():
+        os.mkdir(project_name)
+    mopath = os.path.join(os.getcwd(), project_name)
+    film_slab = trans_to_bottom(interface.film)
+    substrate_slab = add_sele_dyn_slab(interface.substrate)
+    film0_slab = trans_to_bottom(get_initial_film(interface, match))
+    wf = []
+    if relax:
+        incar_update = {"EDIFFG": -0.05, "IOPTCELL": IOPTCELL, "ISIF": ISIF, "NSW": 300, \
+                        "LDIPOL": True, "IDIPOL": 3, "EDIFF": 1e-5}
+    else:
+        incar_update = {"LDIPOL": True, "IDIPOL": 3, "LWAVE": False, "EDIFF": 1e-5}
+    fw1, fw2 = NDPDPWF(film_slab, project_name, NCORE, db_file, vasp_cmd, \
+                             {'project_name': project_name, 'job': 'film_t'}, \
+                             {"_launch_dir": os.path.join(mopath, 'film_t'), 'job': 'film_t'}, \
+                            incar_update)
+    wf.append(fw1)
+    wf.append(fw2)
     
-    film_slab_op_fw = Firework([
-    WriteVaspFromIOSet(vasp_input_set=ITRelaxSet, structure=interface.film),
-    RunVaspCustodian(),
-    VaspToDb()], name=f"Optimization", spec = spec)
+    fw1, fw2 = NDPDPWF(substrate_slab, project_name, NCORE, db_file, vasp_cmd, \
+                             {'project_name': project_name, 'job': 'substrate'}, \
+                             {"_launch_dir": os.path.join(mopath, 'substrate'), 'job': 'substrate'}, \
+                            incar_update)
+    wf.append(fw1)
+    wf.append(fw2)
     
-    substrate_slab_op_fw = Firework([
-    WriteVaspFromIOSet(vasp_input_set=ITRelaxSet, structure=interface.substrate),
-    RunVaspCustodian(),
-    VaspToDb()], name=f"Optimization", spec = spec)
-    
-    film0_slab_op_fw = Firework([
-    WriteVaspFromIOSet(vasp_input_set=ITRelaxSet, structure=get_initial_film(interface)),
-    RunVaspCustodian(),
-    VaspToDb()], name=f"Optimization", spec = spec)
-    
-    static_fw = Firework(
-        tasks=[
-            WriteVaspStaticFromPrev(prev_calc_dir=".", vasp_input_set=ITStaticSet),
-            RunVaspCustodian(),
-            VaspToDb()
-        ],
-        spec = spec,
-        name = "Static Calculation"
-        )
-    
-    film_slab_workflow = Workflow([film_slab_op_fw, static_fw], name = f"{project_name}:{unique_match_idx}:{interface.interface_properties['termination']}:FilmSlab")
-    film_slab_workflow = Workflow([substrate_slab_op_fw, static_fw], name = f"{project_name}:{unique_match_idx}:{interface.interface_properties['termination']}:SubstrateSlab")
-    film_slab_workflow = Workflow([film0_slab_op_fw, static_fw], name = f"{project_name}:{unique_match_idx}:{interface.interface_properties['termination']}:Film0Slab")
-    return [film_slab_workflow, film_slab_workflow, film_slab_workflow]
-
-
-def get_static_fw(spec):
-    return Firework(
-        tasks=[
-            WriteVaspStaticFromPrev(prev_calc_dir=".", vasp_input_set=ITStaticSet),
-            RunVaspCustodian(),
-            VaspToDb()
-        ],
-        spec = spec,
-        name = "Static Calculation"
-        )
+    if calc_initial_film:
+        fw1, fw2 = NDPDPWF(film0_slab, project_name, NCORE, db_file, vasp_cmd, \
+                                 {'project_name': project_name, 'job': 'film_0'}, \
+                                 {"_launch_dir": os.path.join(mopath, 'film_t'), 'job': 'film_0'}, \
+                                incar_update)
+        wf.append(fw1)
+        wf.append(fw2)
+    return wf
 
 def LatticeRelaxWF(film_path, substrate_path, project_name, NCORE, db_file, vasp_cmd):
     mopath = os.path.join(os.getcwd(), 'lattices')
@@ -246,12 +253,13 @@ def RegistrationScan(cib, project_name, xyzs, termination, slab_length, vacuum_o
         tasks=[
             ModifyIncar(incar_update = {"LDIPOL": True, "IDIPOL": 3, "LWAVE":False, "EDIFF":1e-5}),
             RunVaspCustodian(vasp_cmd = vasp_cmd, handler_group = "no_handler", gzip_output = False),
-            VaspToDb(db_file = db_file, additional_fields = {'registration_id': count, 'project_name': project_name})
+            VaspToDb(db_file = db_file, additional_fields = {'job': f'rg_{count}', 'project_name': project_name})
         ], name = f'{project_name}_DP', parents = fw1, spec={"_launch_dir": os.path.join(mopath,str(count))})
         wf.append(fw1)
         wf.append(fw2)
         count += 1
-    wf = Workflow(wf)
+    se_wf = SlabEnergyWorkflows(interface_here, cib.zsl_matches[0], project_name, NCORE, db_file, vasp_cmd)
+    wf = Workflow(wf+se_wf)
     wf.name = project_name
     return wf
 

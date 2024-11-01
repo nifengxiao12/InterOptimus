@@ -1,10 +1,9 @@
-from CNID import calculate_cnid_in_supercell
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
 import numpy as np
 from pymatgen.analysis.interfaces.zsl import fast_norm
-from CNID import triple_dot
+from InterOptimus.CNID import triple_dot, calculate_cnid_in_supercell
 from itertools import combinations
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -196,3 +195,10 @@ def add_sele_dyn(it):
     mobility_mtx[sub_bot_indices] = [False, False, False]
     it.add_site_property('selective_dynamics', mobility_mtx)
     return it
+
+def add_sele_dyn_slab(slab):
+    sub_bot_indices = get_termination_indices(slab)[0]
+    mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
+    mobility_mtx[sub_bot_indices] = [False, False, False]
+    slab.add_site_property('selective_dynamics', mobility_mtx)
+    return slab

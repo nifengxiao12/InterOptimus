@@ -15,7 +15,7 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.12",
+    python_requires=">=3.11",
     install_requires=[
         "pymatgen",
         "interfacemaster",
@@ -24,7 +24,9 @@ setup(
         "matplotlib",
         "atomate",
         "fireworks",
-        "adjustText"
+        "adjustText",
+        "ipywidgets",
+        "tqdm",
         
     ]
 )

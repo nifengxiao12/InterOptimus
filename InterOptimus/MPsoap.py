@@ -328,6 +328,10 @@ class soap_analyzer:
                                       get_EN_diff_crystall(self.struct, self.non_equi_sites_indices[i]))
                 self.soap_infos.append(this_soap)
 
+def get_delta_distances(atom_index, structure, cutoff):
+    neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
+    return array([neighbor[1] for neighbor in neighbors])
+    
 def get_min_nb_distance(atom_index, structure):
     """
     get the minimum neighboring distance for certain atom in a structure

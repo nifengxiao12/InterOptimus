@@ -15,7 +15,7 @@ from pymatgen.core.periodic_table import Element
 from skopt import gp_minimize
 from skopt.space import Real
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
-from InterOptimus.MPsoap import to_ase, get_min_nb_distance, soap_data_generator, get_EN_diff_interface
+from InterOptimus.MPsoap import to_ase, get_min_nb_distance, soap_data_generator, get_EN_diff_interface, get_delta_distances
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from InterOptimus.matching import interface_searching
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
@@ -27,7 +27,7 @@ from scipy.stats import pearsonr
 from scipy.stats.mstats import spearmanr
 from skopt.space import Real, Integer
 import math
-from InterOptimus.VaspWorkFlow import RegistrationScan
+from InterOptimus.VaspWorkFlow import RegistrationScan, ScoreRankerWF
 from InterOptimus.tool import get_one_interface, read_key_item, get_it_core_indices
 
 class interface_pre_optimizer:
@@ -35,8 +35,7 @@ class interface_pre_optimizer:
     interface pre-optimizer
     """
     def __init__(self, cib, termination, soap_data, slab_length = 10, c_periodic = False, vacuum_over_film = 0.01, \
-                 rpsv_pow = {'c':1, 'd':1, 'm':20, 'rho':0.7}, rp_kernel = True, en_kernel = True, \
-                 kernel_factors = {'soap':1, 'rp':1, 'en':1}, en_cut = 0):
+                 kernel_factors = {'soap':1, 'rp':1, 'en':1}, en_cut = 1):
         """
         Args:
         cib (CoherentInterfaceBuilder).
@@ -45,7 +44,6 @@ class interface_pre_optimizer:
         slab_length (float): minimum slab length.
         c_periodic (bool): whether set c-direction as periodic boundary condition.
         vacuum_over_film (float): length of vaccum over film.
-        rpsv_pow (dict): function parameters to penalty too close atoms
         """
         self.interface_initial = list(cib.get_interfaces(termination = termination, \
                                    substrate_thickness = slab_length, \
@@ -78,14 +76,12 @@ class interface_pre_optimizer:
         self.cib = cib
         self.termination = termination
         self.vacuum_over_film = vacuum_over_film
-        self.rpsv_pow = rpsv_pow
-        self.rp_kernel = rp_kernel
-        self.en_kernel = en_kernel
         self.op_data = {}
         self.kernel_factors = kernel_factors
         self.en_cut = en_cut
+    """
     def rpsv_pow_func(self, r):
-        """
+
         penalty too close atoms
         
         Args:
@@ -93,9 +89,9 @@ class interface_pre_optimizer:
         
         Return:
         penalty factor
-        """
+
         return 1 - self.rpsv_pow['c']/(self.rpsv_pow['d'] + (r/self.rpsv_pow['rho'])**self.rpsv_pow['m'])
-    
+    """
     def trial(self, params):
         """
         score a structure with x, y, z interface registration
@@ -125,7 +121,6 @@ class interface_pre_optimizer:
         SOAP_discriptors = self.SOAP_analyzer.create(to_ase(interface_here), self.soap_ids)
         site_scores = []
         self.op_data[(x,y,z)] = {}
-        existing_too_close_sites = False
         for i in range(len(SOAP_discriptors)):
             #by_el_dict
             self.op_data[(x,y,z)][self.soap_ids[i]] = {}
@@ -139,7 +134,7 @@ class interface_pre_optimizer:
             kernel_vals = soap_kernel(a, bs) ** self.kernel_factors['soap']
             self.op_data[(x,y,z)][self.soap_ids[i]]['it_term_soaps'] = a
             self.op_data[(x,y,z)][self.soap_ids[i]]['soap_kernels'] = kernel_vals.copy()
-            
+            """
             #repulsive kernel
             if self.rp_kernel:
                 rp_kernels_here = RP_kernel(get_min_nb_distance(self.soap_ids[i], interface_here), \
@@ -148,20 +143,26 @@ class interface_pre_optimizer:
                 kernel_vals *= rp_kernels_here ** self.kernel_factors['rp']
                 if all(rp_kernels_here < 1e-4):
                     existing_too_close_sites = True
-            
+            """
+            rp_kernels = []
+            min_ds_array = by_el_dict['min_nb_distances']
+            for ref_ds in min_ds_array:
+                close_ds = get_delta_distances(self.soap_ids[i], interface_here, ref_ds)
+                rp_kernels.append(RP_kernel(ref_ds, close_ds, self.kernel_factors['rp']))
+            rp_kernels = array(rp_kernels)
+            kernel_vals += rp_kernels
             #Electronegtivity kernel
-            if self.en_kernel:
-                EN_kernels = []
-                r_ENs = []
-                for j in range(len(by_el_dict['min_nb_distances'])):
-                    r_cut = by_el_dict['min_nb_distances'][j] * 1.05
-                    ref_EN = by_el_dict['EN_diffs'][j]
-                    t_EN = get_EN_diff_interface(interface_here, self.soap_ids[i], r_cut)
-                    r_ENs.append(ref_EN)
-                    EN_kernels.append(EN_kernel(t_EN, ref_EN, self.en_cut))
-                EN_kernels = array(EN_kernels)
-                self.op_data[(x,y,z)][self.soap_ids[i]]['en_kernels'] = EN_kernels
-                kernel_vals *= EN_kernels ** self.kernel_factors['en']
+            EN_kernels = []
+            r_ENs = []
+            for j in range(len(by_el_dict['min_nb_distances'])):
+                r_cut = by_el_dict['min_nb_distances'][j] * self.en_cut
+                ref_EN = by_el_dict['EN_diffs'][j]
+                t_EN = get_EN_diff_interface(interface_here, self.soap_ids[i], r_cut)
+                r_ENs.append(ref_EN)
+                EN_kernels.append(EN_kernel(t_EN, ref_EN))
+            EN_kernels = array(EN_kernels)
+            self.op_data[(x,y,z)][self.soap_ids[i]]['en_kernels'] = EN_kernels
+            kernel_vals *= EN_kernels ** self.kernel_factors['en']
             
             site_scores.append(max(kernel_vals))
             self.op_data[(x,y,z)][self.soap_ids[i]]['site'] = interface_here[self.soap_ids[i]]
@@ -173,10 +174,7 @@ class interface_pre_optimizer:
             #print(self.op_data[(x,y,z)][self.soap_ids[i]])
             self.this_trial_found_id = kernel_vals.argmax()
         #return dissimilarity for BO
-        if existing_too_close_sites:
-            it_score = 0
-        else:
-            it_score = average(array(site_scores))
+        it_score = average(array(site_scores))
         self.op_data[(x,y,z)]['reg_score'] = it_score
         return 1 - it_score
 
@@ -184,16 +182,18 @@ def soap_kernel(a, bs):
     a = array(a)
     bs = array(bs)
     return dot(a, bs.T) / sqrt(dot(a,a) * diagonal(dot(bs,bs.T)))
-
+"""
 def RP_kernel(t_min_d, ref_ds, rpsv_pow_func):
     return rpsv_pow_func(t_min_d / ref_ds)
-    
-def EN_kernel(t_EN, ref_EN, cut_frac):
+"""
+
+def RP_kernel(ref_ds, close_ds, c):
+    return - c * sum( ((ref_ds-close_ds)/ref_ds)**3 ) **2
+
+def EN_kernel(t_EN, ref_EN):
     if t_EN * ref_EN > 0:
-        if abs(t_EN) < abs(ref_EN) and abs(t_EN) >= cut_frac * abs(ref_EN):
-            kns = (abs(t_EN) - cut_frac * abs(ref_EN)) / (abs(ref_EN) - cut_frac * abs(ref_EN))
-        elif abs(t_EN) < cut_frac * abs(ref_EN):
-            kns = 0
+        if abs(t_EN) < abs(ref_EN):
+            kns = t_EN/ref_EN
         else:
             kns = 1
     else:
@@ -269,14 +269,14 @@ class WorkPatcher:
         return cls(unique_matches, None, film, substrate)
         
     def param_parse(self, project_name, termination_ftol, slab_length, c_periodic = False, vacuum_over_film = 0.01, \
-                 rpsv_pow = {'c':1, 'd':1, 'm':20, 'rho':0.7}, kernel_factors = {'soap':1, 'rp':1, 'en':1}):
+                 kernel_factors = {'soap':1, 'rp':1, 'en':1}, en_cut = 1):
         self.project_name = project_name
         self.termination_ftol = termination_ftol
         self.slab_length = slab_length
         self.c_periodic = c_periodic
         self.vacuum_over_film = vacuum_over_film
-        self.rpsv_pow = rpsv_pow
         self.kernel_factors = kernel_factors
+        self.en_cut = en_cut
         #self.get_all_unique_terminations()
         
     def get_unique_terminations(self, id):
@@ -312,46 +312,12 @@ class WorkPatcher:
                                     termination = self.all_unique_terminations[match_id][termination_id], \
                                    soap_data = self.soap_data,\
                                     c_periodic = self.c_periodic, slab_length = self.slab_length, \
-                                    vacuum_over_film = self.vacuum_over_film, rpsv_pow = self.rpsv_pow, \
-                                    kernel_factors = self.kernel_factors)
+                                    vacuum_over_film = self.vacuum_over_film, \
+                                    kernel_factors = self.kernel_factors, en_cut = self.en_cut)
         scores = []
         for i in xyzs:
             scores.append(1 - itopt.trial(i))
         return scores
-    
-    def PatchRegistrationStaticScanWorkFlow(self, match_id, termination_id, NCORE, db_file, vasp_cmd, scan_method = {'method':'BO', 'params':{'n_calls':20}}, savefile = False):
-        cib = CoherentInterfaceBuilder(film_structure=self.film,
-                               substrate_structure=self.substrate,
-                               film_miller=self.unique_matches[match_id].film_miller,
-                               substrate_miller=self.unique_matches[match_id].substrate_miller,
-                               zslgen=SubstrateAnalyzer(max_area=200), termination_ftol=self.termination_ftol, label_index=True,\
-                               filter_out_sym_slabs=False)
-        cib.zsl_matches = [self.unique_matches[match_id]]
-        
-        itopt = interface_pre_optimizer(cib = cib, \
-                                    termination = self.unique_terminations[termination_id], \
-                                   soap_data = self.soap_data,\
-                                    c_periodic = self.c_periodic, slab_length = self.slab_length, \
-                                    vacuum_over_film = self.vacuum_over_film)
-                                    
-        if scan_method['method'] == 'BO':
-            from InterOptimus.VaspWorkFlow import RegistrationStaticScanWorkFlow_BO
-            result = registration_minimizer(itopt, scan_method['params']['n_calls'])
-            with open('site_data_BO.pkl', 'wb') as f:
-                pickle.dump(itopt.op_data, f)
-            savetxt(f"RGSOResult_{match_id}_{termination_id}.dat", column_stack((result.x_iters, 1 - array(result.func_vals))))
-
-            return RegistrationStaticScanWorkFlow_BO(itopt, result,\
-             f"{self.project_name}", \
-             NCORE = NCORE, \
-            db_file = db_file, vasp_cmd = vasp_cmd, savefile = savefile)
-            
-        elif scan_method['method'] == 'grid':
-            from InterOptimus.VaspWorkFlow import RegistrationStaticScanWorkFlow_grid
-            return RegistrationStaticScanWorkFlow_grid(itopt, scan_method['params']['density'],
-             f"{self.project_name}", \
-             NCORE = NCORE, \
-            db_file = db_file, vasp_cmd = vasp_cmd)
     
     def PatchRegistrationScan(self, match_id, termination_id, atom_non_closer_than, n_calls = 50, \
                                 rbt_non_closer_than = 0.5, NCORE = 12, db_file = '', vasp_cmd = ''):
@@ -403,9 +369,9 @@ class WorkPatcher:
                     xyzs.append([x,y,z])
                     num_of_sampled += 1
         
-        savetxt(f'{self.project_name}_{match_id}_{termination_id}_xyzs', xyzs)
-        savetxt(f'{self.project_name}_{match_id}_{termination_id}_xyzs_carts', rbt_carts)
-        return  RegistrationScan(self.cib, f'{self.project_name}_{match_id}_{termination_id}', xyzs, self.unique_terminations[termination_id], self.slab_length, self.vacuum_over_film, self.c_periodic, NCORE, db_file, vasp_cmd)
+        savetxt(f'{match_id}_{termination_id}_xyzs', xyzs)
+        savetxt(f'{match_id}_{termination_id}_xyzs_carts', rbt_carts)
+        return  RegistrationScan(self.cib, f'{match_id}_{termination_id}', xyzs, self.unique_terminations[termination_id], self.slab_length, self.vacuum_over_film, self.c_periodic, NCORE, db_file, vasp_cmd)
 
 def unique_no_sort(array, axis):
     uniq, index = unique(array, return_index=True, axis = axis)
@@ -445,16 +411,16 @@ class interface_score_ranker:
         self.soap_data = soap_data
         
     def parse_opt_params(self, c_periodic = False, vacuum_over_film = 10, slab_length = 10, \
-                 rp_kernel = True, en_kernel = True, rpsv_pow = {'c':1, 'd':1, 'm':20, 'rho':0.7}, termination_ftol = 0.15, opt_num = 20, ct_ratio = 0.8, kernel_factors = {'soap':1, 'rp':1, 'en':1}):
+                 termination_ftol = 0.15, opt_num = 20, ct_ratio = 0.8, kernel_factors = {'soap':1, 'rp':1, 'en':1}, en_cut = 1):
         self.c_periodic = c_periodic
         self.vacuum_over_film = vacuum_over_film
         self.slab_length = slab_length
-        self.rpsv_pow = rpsv_pow
         self.termination_ftol = termination_ftol
         self.opt_num = opt_num
         self.ct_ratio = ct_ratio
         self.kernel_factors = {'soap':1, 'rp':1, 'en':1}
         self.get_match_term_idx()
+        self.en_cut = en_cut
 
     def registration_optimizing(self, cib, termination, site_data_name):
         #registration by in cartesian coordinates
@@ -462,11 +428,11 @@ class interface_score_ranker:
                                     termination = termination, \
                                    soap_data = self.soap_data,\
                                     c_periodic = self.c_periodic, slab_length = self.slab_length, \
-                                    vacuum_over_film = self.vacuum_over_film, rpsv_pow = self.rpsv_pow, \
-                                    kernel_factors = self.kernel_factors)
+                                    vacuum_over_film = self.vacuum_over_film, \
+                                    kernel_factors = self.kernel_factors, en_cut = self.en_cut)
                     
         result = registration_minimizer(itopt, self.opt_num)
-        with open(f'{site_data_name}.pkl', 'wb') as f:
+        with open(f'{site_data_name[0]}_{site_data_name[1]}.pkl', 'wb') as f:
             pickle.dump(itopt.op_data, f)
         cart_CNID = dot(itopt.interface_initial.lattice.matrix.T, itopt.CNID)
         cart_3D = dot(cart_CNID, array(result.x_iters)[:,:2].T).T
@@ -699,7 +665,47 @@ class interface_score_ranker:
                                        gap=gap, \
                                        in_layers=False))[0]
             return interface_here
+
+    def PatchHighThroughputWF(self, delta_score, project_name, NCORE, db_file, vasp_cmd):
+        selected_its = []
+        maxS = self.get_global_rank_info()['$S$'].to_numpy().max()
+        for i in list(self.opt_info_dict.keys()):
+            here_xyzs = self.opt_info_dict[i]['registration_input']
+            here_xyz_carts = self.opt_info_dict[i]['registration_cart']
+            here_Ss = self.opt_info_dict[i]['score']
+            selected_xyzs = here_xyzs[here_Ss >= maxS - delta_score]
+            selecte_xyz_carts = here_xyz_carts[here_Ss >= maxS - delta_score]
+            selected_Ss = here_Ss[here_Ss >= maxS - delta_score]
+            num_of_sampled = 0
+            rbt_carts = []
+            if len(selected_xyzs) > 0:
+                for j in range(len(selected_xyzs)):
+                    if num_of_sampled == 0:
+                        selected_its.append([i, selected_xyzs[j], self.opt_info_dict[i]['termination'], selected_Ss[j]])
+                        rbt_carts.append(here_xyz_carts[j])
+                        num_of_sampled += 1
+                    else:
+                        cart_here = here_xyz_carts[j]
+                        distwithbefore = norm(repeat([cart_here], num_of_sampled, axis = 0) - rbt_carts, axis = 1)
+                        if min(distwithbefore) > 1:
+                            selected_its.append([i, selected_xyzs[j], self.opt_info_dict[i]['termination'], selected_Ss[j]])
+                            rbt_carts.append(here_xyz_carts[j])
+                            num_of_sampled += 1
+        return ScoreRankerWF(self, selected_its, project_name, NCORE, db_file, vasp_cmd)
+        """
+        CNID = calculate_cnid_in_supercell(interface)[0]
+        CNID_cart = dot(interface.lattice.matrix.T, CNID)
         
+        num_of_sampled = 1
+        rbt_carts = [[0,0,2]]
+        xyzs = [[0,0,2]]
+        while num_of_sampled < n_calls:
+            x,y,z = [random.random() for i in range(3)]
+            z = z * 3
+            cart_here = x*CNID_cart[:,0] + y*CNID_cart[:,1] + [0,0,z]
+            distwithbefore = norm(repeat([cart_here], num_of_sampled, axis = 0) - rbt_carts, axis = 1)
+            if min(distwithbefore) > rbt_non_closer_than:
+        """
 def read_pickle(file):
     with open(file, 'rb') as f:
         return pickle.load(f)
@@ -711,10 +717,25 @@ def calculate_correlation(scores, energies):
     scores_high = scores[highest_20_ids]
     energies_high_score = energies[highest_20_ids]
     sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
+    entropy_s = normalized_entropy_continuous(scores)
     correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
     if math.isnan(correlation):
         correlation = 0
-    return correlation
+    print(f"cor: {correlation}, entropy: {entropy_s}, L: {correlation - 0.3 * entropy_s}")
+    return correlation - 0.3 * entropy_s
+
+def normalized_entropy_continuous(y, num_bins=100):
+    counts, _ = np.histogram(y, bins=num_bins, range=(0, 1), density=True)
+    probabilities = counts / np.sum(counts)
+    
+    probabilities = probabilities[probabilities > 0]
+
+    H = -np.sum(probabilities * np.log2(probabilities))
+    
+    H_max = np.log2(num_bins)
+
+    H_norm = H / H_max
+    return H_norm
 
 class HPtrainer:
     def __init__(self, substrate_conv, film_conv, sub_analyzer, DFT_results, slab_length = 5, termination_ftol = 0.1, \
@@ -739,14 +760,14 @@ class HPtrainer:
         self.training_y = training_y
 
     def trial(self, params):
-        rcut, n_max, l_max, soapWr0, soapWc, soapWd, soapWm, KFsoap, KFrp, KFen, rpPOWc, rpPOWd, rpPOWm, rpPOWrho = params
+        rcut, n_max, l_max, soapWr0, soapWc, soapWd, soapWm, KFsoap, KFrp, KFen, en_cut = params
         soap_params = {'r_cut':rcut, 'n_max':n_max, 'l_max':l_max, 'weighting':{"function":"pow", "r0":soapWr0, "c":soapWc, "d":soapWd, "m":soapWm}}
         self.soap_data.calculate_soaps(soap_params)
         wp = WorkPatcher(self.wp_initial.unique_matches, self.soap_data, self.film, self.substrate)
         wp.param_parse(project_name = 'THP', termination_ftol = self.termination_ftol, slab_length = self.slab_length, \
-                       c_periodic = self.c_period, vacuum_over_film = self.vacuum_over_film,
-                       rpsv_pow = {'c':rpPOWc, 'd':rpPOWd, 'm':rpPOWm, 'rho':rpPOWrho}, kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen})
+                       c_periodic = self.c_period, vacuum_over_film = self.vacuum_over_film, kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen}, en_cut = en_cut)
         wp.all_unique_terminations = self.all_unique_terminations
+        print(params)
         if self.training_y == 'binding_energies':
             scores = []
             energies = []
@@ -757,28 +778,22 @@ class HPtrainer:
             energies = array(energies)
             return calculate_correlation(scores, energies)
         else:
-            dictarray = array(list(self.DFT_results.keys()))
-            unique_match_ids = unique(dictarray[:,0])
             key_list = list(self.DFT_results.keys())
             correlations = []
             weightings = []
-            for i in unique_match_ids:
-                #each unique id, optimize for all the terminations
-                keys_with_this_id = where(dictarray[:,0] == i)[0]
-                scores = []
-                energies = []
-                num_this_match = 0
-                for j in keys_with_this_id:
-                    k = key_list[j]
-                    scores += wp.score_interfaces(k[0], k[1], self.DFT_results[k]['xyzs'])
-                    energies += list(self.DFT_results[k][self.training_y])
-                    num_this_match += len(scores)
+            for k in key_list:
+                scores = wp.score_interfaces(k[0], k[1], self.DFT_results[k]['xyzs'])
+                energies = self.DFT_results[k][self.training_y]
+                num_this_match = len(scores)
                 scores = array(scores)
                 energies = array(energies)
                 weightings.append(num_this_match)
                 correlations.append(calculate_correlation(scores, energies))
-                weightings, correlations = array(weightings), array(correlations)
-            return sum(weightings * correlations) / sum(weightings)
+            weightings, correlations = array(weightings), array(correlations)
+            ave_corr = sum(weightings * correlations) / sum(weightings)
+            print(ave_corr)
+            return ave_corr
+        
 
 def HPoptimizer(hptrainer, n_calls):
     def trial_with_progress(func, n_calls, *args, **kwargs):
@@ -796,14 +811,11 @@ def HPoptimizer(hptrainer, n_calls):
         Real(1, 2, name = 'soapWc'),
         Real(1, 2, name = 'soapWd'),
         Integer(2,50, name = 'soapWm'),
-        Real(1, 2, name = 'KFsoap'),
-        Real(0, 2, name = 'KFrp'),
-        Real(0, 2, name = 'KFen'),
-        Real(1, 2, name = 'rpPOWc'),
-        Real(1, 2, name = 'rpPOWd'),
-        Integer(5,20, name = 'rpPOWm'),
-        Real(0.1, 0.9, name = 'rpPOWrho'),
+        Real(0.5, 3, name = 'KFsoap'),
+        Real(0, 0.5, name = 'KFrp'),
+        Real(0, 1, name = 'KFen'),
+        Real(1+1e-4, 1.2, name = 'en_cut'),
     ]
     # Run the optimization with progress bar
-    result = trial_with_progress(hptrainer.trial, n_calls=n_calls, random_state=42)
+    result = trial_with_progress(hptrainer.trial, n_calls=n_calls, random_state=99)
     return result

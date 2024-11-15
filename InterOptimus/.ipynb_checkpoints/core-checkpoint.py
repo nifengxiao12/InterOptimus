@@ -94,7 +94,7 @@ def RandomSampling():
     for i in MtchTerm_tuples:
         wp.get_unique_terminations(i[0])
         wf_RGS = wp.PatchRegistrationScan(i[0], i[1], HPT_data['ANCT'], n_calls = HPT_data['NUM'], \
-                                rbt_non_closer_than = HPT_data['RNCT'], NCORE = set_data['NCORE'], \
+                                rbt_non_closer_than = HPT_data['RNCT'], NCORE = HPT_data['NCORE'], \
                                 db_file = set_data['DBFILE'], vasp_cmd = set_data['VASPCMD'])
         lp.add_wf(wf_RGS)
 
@@ -115,11 +115,11 @@ def ReadRandomSamplingResults():
         xyzs_cart = np.loadtxt(f'{j[0]}_{j[1]}_xyzs_carts')
         energies = []
         binding_energies = []
-        substrate_E = readDBvasp(db, {'job':f'substrate', 'project_name':f'{j[0]}_{j[1]}'})
-        film_t_E = readDBvasp(db, {'job':f'film_t', 'project_name':f'{j[0]}_{j[1]}'})
+        substrate_E = readDBvasp(db, {'job':f'substrate', 'project_name':f'{PNAME}_{j[0]}_{j[1]}'})
+        film_t_E = readDBvasp(db, {'job':f'film_t', 'project_name':f'{PNAME}_{j[0]}_{j[1]}'})
         area = areas[j[0]]
         for i in range(HPT_data['NUM']):
-            it_energy = readDBvasp(db, {'job':f'rg_{i}', 'project_name':f'{j[0]}_{j[1]}'})
+            it_energy = readDBvasp(db, {'job':f'rg_{i}', 'project_name':f'{PNAME}_{j[0]}_{j[1]}'})
             energies.append(it_energy)
             binding_energies.append((it_energy - substrate_E - film_t_E)/area)
         energies = np.array(energies)
@@ -194,23 +194,24 @@ def OutputHPtrainingResults():
     xs = np.array(result['xs'])
     ys = np.array(result['ys'])
     best_params = xs[ys.argmin()]
+    print(result)
     columns = ['$r_{cut}$', '$n_{max}$', '$l_{max}$', \
           '$r_{0}^{sw}$', '$c^{sw}$', '$d^{sw}$', '$m^{sw}$', \
-          r'$\xi^{soap}$', r'$\xi^{rp}$', r'$\xi^{EG}$', r'$f_{en}$', r'$P$']
+          r'$\xi^{soap}$', r'$\xi^{rp}$', r'$\xi^{EG}$', r'$f_{en}$' r'$P$']
     data = pd.DataFrame(np.column_stack((xs,ys)), columns=columns)
     plt.tight_layout()
-    fig, axes = plt.subplots(3, 4, figsize=(20, 15), sharey=True)
+    fig, axes = plt.subplots(3, 5, figsize=(25, 15), sharey=True)
     for i in range(len(data.columns)):
-        axes[int(i/4)][i%4].scatter(data[columns[i]], data[columns[-1]])
-        axes[int(i/4)][i%4].set_xlabel(columns[i], fontsize = 20)
-        axes[int(i/4)][i%4].set_ylabel(columns[-1], fontsize = 20)
+        axes[int(i/5)][i%5].scatter(data[columns[i]], data[columns[-1]])
+        axes[int(i/5)][i%5].set_xlabel(columns[i], fontsize = 20)
+        axes[int(i/5)][i%5].set_ylabel(columns[-1], fontsize = 20)
     plt.savefig(f"HP_{training_y}.jpg", dpi=600, format = 'jpg')
     DFT_results = read_pickle('DFT_results.pkl')
 
     rcut, n_max, l_max, \
     soapWr0, soapWc, soapWd, soapWm, \
     KFsoap, KFrp, KFen, \
-    en_cut = best_params
+    rpPOWc, rpPOWd, rpPOWm, rpPOWrho = best_params
     soap_params = {'r_cut':rcut, 'n_max':int(n_max), 'l_max':int(l_max), \
                'weighting':{"function":"pow", "r0":soapWr0, "c":soapWc, "d":soapWd, "m":soapWm}}
 
@@ -221,14 +222,15 @@ def OutputHPtrainingResults():
     film_conv = Structure.from_file('FLM.cif')
     IDG = InputDataGenerator()
     wp = WorkPatcher(IDG.unique_matches, soap_data, IDG.film, IDG.substrate)
-    wp.param_parse(project_name = set_data['PNAME'], termination_ftol = set_data['TFTOL'], slab_length = set_data['SLBLTH'], c_periodic = set_data['CPRD'], vacuum_over_film = set_data['VCOFLM'], kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen}, en_cut = en_cut)
+    wp.param_parse(project_name = set_data['PNAME'], termination_ftol = set_data['TFTOL'], slab_length = set_data['SLBLTH'], c_periodic = set_data['CPRD'], vacuum_over_film = set_data['VCOFLM'],
+                       rpsv_pow = {'c':rpPOWc, 'd':rpPOWd, 'm':rpPOWm, 'rho':rpPOWrho}, kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen})
     wp.get_all_unique_terminations()
     results_by_BPs = {}
     all_xs, all_ys = [], []
     for i in list(DFT_results.keys()):
         scores_here = wp.score_interfaces(i[0], i[1], DFT_results[i]['xyzs'])
         scores_here = np.array(scores_here)
-        xs, ys = scores_here, DFT_results[i][training_y]
+        xs, ys = scores_here, DFT_results[i]['training_y']
         results_by_BPs[i] = np.column_stack((xs, ys))
         all_xs += list(xs)
         all_ys += list(ys)
@@ -237,31 +239,3 @@ def OutputHPtrainingResults():
     results_by_BPs[(-1,-1)] = np.column_stack((all_xs, all_ys))
     draw_xs_ys(np.array(all_xs), np.array(all_ys), (-1,-1), IDG.areas, training_y)
     save_pickle('SvE_by_BP_{training_y}.pkl', results_by_BPs)
-
-def HighThrougput(delta_S):
-    set_data = read_key_item('INTAR')
-    HPT_data = read_key_item('RDSANAR')
-    training_y = 'energies'
-    result = read_pickle(f"HPresults_{training_y}.pkl")
-    xs = np.array(result['xs'])
-    ys = np.array(result['ys'])
-    best_params = xs[ys.argmin()]
-    rcut, n_max, l_max, \
-    soapWr0, soapWc, soapWd, soapWm, \
-    KFsoap, KFrp, KFen, \
-    en_cut = best_params
-    soap_params = {'r_cut':rcut, 'n_max':int(n_max), 'l_max':int(l_max), \
-               'weighting':{"function":"pow", "r0":soapWr0, "c":soapWc, "d":soapWd, "m":soapWm}}
-    #get_MPdocs()
-    IDG = InputDataGenerator()
-    soap_data = soap_data_generator.from_dir()
-    soap_data.calculate_soaps(soap_params)
-    ISRker = interface_score_ranker(IDG, soap_data, IDG.substrate, IDG.film)
-    ISRker.parse_opt_params(c_periodic = set_data['CPRD'], vacuum_over_film = set_data['VCOFLM'], slab_length = set_data['SLBLTH'],\
-                            termination_ftol = set_data['TFTOL'], opt_num=HPT_data['NUM'], \
-                            kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen}, en_cut = en_cut)
-    
-    ISRker.global_searching()
-    wf = ISRker.PatchHighThroughputWF(delta_S, 'HighTP', set_data['NCORE'], set_data['DBFILE'], vasp_cmd = set_data['VASPCMD'])
-    lp = LaunchPad.auto_load()
-    lp.add_wf(wf)

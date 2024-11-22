@@ -208,6 +208,7 @@ class soap_data_generator:
         cluster the soap descriptors by element names.
         """
         self.by_element_dict = {}
+        min_dists_saved = existfilehere('min_dists.dat')
         for i in self.elements:
             self.by_element_dict[i] = {}
             self.by_element_dict[i]['soap_descs'] = \
@@ -221,6 +222,11 @@ class soap_data_generator:
             
             self.by_element_dict[i]['min_nb_distances'] = \
              self.min_nb_distances[self.soap_elements == i]
+            if not min_dists_saved:
+                with open('min_dists.dat','a') as f:
+                    for i in self.min_nb_distances[self.soap_elements == i]:
+                        f.write(f'{i} ')
+                    f.write(f'\n')
             
             self.by_element_dict[i]['EN_diffs'] = \
              self.EN_diffs[self.soap_elements == i]

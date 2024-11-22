@@ -7,6 +7,10 @@ from InterOptimus.CNID import triple_dot, calculate_cnid_in_supercell
 from itertools import combinations
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
+import os
+
+def existfilehere(filename):
+    return os.path.isfile(os.path.join(os.getcwd(), filename))
 
 def get_termination_indices(slab, ftol= 0.25):
     """

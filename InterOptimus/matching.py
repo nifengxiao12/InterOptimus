@@ -68,7 +68,7 @@ class equi_match_identifier:
     """
     determine whether two matches are identical
     """
-    def __init__(self, substrate, film):
+    def __init__(self, substrate, film, substrate_conv, film_conv):
         """
         Args:
         
@@ -77,8 +77,10 @@ class equi_match_identifier:
         """
         self.film = film
         self.substrate = substrate
-        self.substrate_equi_directions_identifier = equi_directions_identifier(substrate)
-        self.film_equi_directions_identifier = equi_directions_identifier(film)
+        self.film_conv = film_conv
+        self.substrate_conv = substrate_conv
+        self.substrate_equi_directions_identifier = equi_directions_identifier(substrate_conv)
+        self.film_equi_directions_identifier = equi_directions_identifier(film_conv)
     
     def identify_by_indices_matching(self, match_1, match_2):
         """
@@ -90,8 +92,16 @@ class equi_match_identifier:
         (bool): whether equivalent
         """
         equivalent = False
-        substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
-        film_set_1, film_set_2 = match_1.film_sl_vectors, match_2.film_sl_vectors
+        #substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
+        #film_set_1, film_set_2 = match_1.film_sl_vectors, match_2.film_sl_vectors
+        substrate_set_1 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
+                                                        match_1.substrate_sl_vectors.T),8).T
+        substrate_set_2 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
+                                                        match_2.substrate_sl_vectors.T),8).T
+        film_set_1 = around(dot(inv(self.film_conv.lattice.matrix.T), \
+                                                        match_1.film_sl_vectors.T),8).T
+        film_set_2 = around(dot(inv(self.film_conv.lattice.matrix.T), \
+                                                        match_2.film_sl_vectors.T),8).T
         if (
             self.substrate_equi_directions_identifier.identify(substrate_set_1[0], substrate_set_2[0]) \
             and self.substrate_equi_directions_identifier.identify(substrate_set_1[1], substrate_set_2[1]) \
@@ -154,7 +164,7 @@ def get_area_match(match):
     """
     return norm(cross(match.substrate_sl_vectors[0], match.substrate_sl_vectors[1]))
     
-def match_search(substrate, film, sub_analyzer):
+def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer):
     """
     given substrate, film lattice structures, \
     get non-identical matches and identical match groups
@@ -177,7 +187,7 @@ def match_search(substrate, film, sub_analyzer):
     unique_matches = []
     equivalent_matches = []
     unique_areas = []
-    ins_equi_match_identifier = equi_match_identifier(substrate, film)
+    ins_equi_match_identifier = equi_match_identifier(substrate, film, substrate_conv, film_conv)
     for i in range(len(matches)):
         angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
                                                        matches[i].substrate_sl_vectors[1])
@@ -197,6 +207,7 @@ def match_search(substrate, film, sub_analyzer):
                     #if indices match, check structure match
                     else:
                         equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
+                                     
                     if equivalent:
                         equivalent_matches[j].append(matches[i])
                         equivalent = True
@@ -239,6 +250,12 @@ class convert_info_forma:
                                                 match.substrate_sl_vectors.T),8).T
         film_prim_sl_vecs_int = around(dot(inv(self.film_prim_lattice), \
                                            match.film_sl_vectors.T),8).T
+                                           
+        substrate_conv_sl = dot(inv(self.substrate_conv_lattice), \
+                                                match.substrate_sl_vectors.T).T
+        film_conv_sl = dot(inv(self.film_conv_lattice), \
+                                                match.film_sl_vectors.T).T
+        
         substrate_prim_plane_set = plane_set(self.substrate_prim_lattice, match.substrate_miller, \
                                              substrate_prim_sl_vecs_int[0], substrate_prim_sl_vecs_int[1])
         film_prim_plane_set = plane_set(self.film_prim_lattice, match.film_miller, \
@@ -256,8 +273,11 @@ class convert_info_forma:
         'film_primitive_vectors':vstack((film_prim_plane_set.v1, film_prim_plane_set.v2)),
         
         'substrate_conventional_vectors':vstack((substrate_conv_plane_set.v1, substrate_conv_plane_set.v2)),
-        'film_conventional_vectors':vstack((film_conv_plane_set.v1, film_conv_plane_set.v2))}
-
+        'film_conventional_vectors':vstack((film_conv_plane_set.v1, film_conv_plane_set.v2)),
+        
+        'substrate_conventional_vectors_float': substrate_conv_sl,
+        'film_conventional_vectors_float': film_conv_sl}
+        
 def get_area(v1, v2):
     """
     get the areas of included by two basic vectors
@@ -302,6 +322,8 @@ def interface_searching(substrate_conv, film_conv, sub_analyzer):
     unique_matches, equivalent_matches, areas = \
     match_search(substrate_conv.get_primitive_structure(),\
                  film_conv.get_primitive_structure(),\
+                 substrate_conv,\
+                 film_conv,\
                  sub_analyzer)
     unique_matches_indices_data = []
     equivalent_matches_indices_data = []

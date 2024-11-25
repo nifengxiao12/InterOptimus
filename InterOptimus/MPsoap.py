@@ -16,7 +16,7 @@ from scipy.spatial.distance import pdist
 from tqdm import tqdm
 import pickle
 import time
-from InterOptimus.tool import read_key_item
+from InterOptimus.tool import read_key_item, existfilehere
 
 def get_Z(struct):
     """given structure, get element names.
@@ -224,8 +224,8 @@ class soap_data_generator:
              self.min_nb_distances[self.soap_elements == i]
             if not min_dists_saved:
                 with open('min_dists.dat','a') as f:
-                    for i in self.min_nb_distances[self.soap_elements == i]:
-                        f.write(f'{i} ')
+                    for distance in self.min_nb_distances[self.soap_elements == i]:
+                        f.write(f'{distance} ')
                     f.write(f'\n')
             
             self.by_element_dict[i]['EN_diffs'] = \

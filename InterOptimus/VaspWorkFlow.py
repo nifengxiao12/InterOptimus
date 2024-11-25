@@ -10,7 +10,7 @@ from pymatgen.core.structure import Structure
 from scipy.linalg import polar
 from InterOptimus.CNID import calculate_cnid_in_supercell
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
-from numpy import arange, ceil, savetxt, dot, meshgrid, array, inf
+from numpy import arange, ceil, savetxt, dot, meshgrid, array, inf, column_stack
 from numpy.linalg import norm, inv
 import pickle
 import shutil
@@ -196,7 +196,7 @@ def SlabEnergyWorkflows(interface, match, project_name, NCORE, db_file, vasp_cmd
     if calc_initial_film:
         fw1, fw2 = NDPDPWF(film0_slab, project_name, NCORE, db_file, vasp_cmd, \
                                  {'project_name': project_name, 'job': f'film_0{tag}'}, \
-                                 {"_launch_dir": os.path.join(mopath, f'film_t{tag}'), 'job': f'film_0{tag}'}, \
+                                 {"_launch_dir": os.path.join(mopath, f'film_0{tag}'), 'job': f'film_0{tag}'}, \
                                 incar_update)
         wf.append(fw1)
         wf.append(fw2)
@@ -312,4 +312,30 @@ def ScoreRankerWF(ISRker, selected_its, project_name, NCORE, db_file, vasp_cmd):
     wf.name = project_name
     return wf
         
-
+def AllMatchTermOPWF(ISRker, its, df, keys, project_name, NCORE, db_file, vasp_cmd):
+    mopath = os.path.join(os.getcwd(), project_name)
+    try:
+        shutil.rmtree(mopath)
+    except:
+        print('no folder')
+    os.mkdir(mopath)
+    Ss = df['$S$'].to_numpy()
+    ids = df['id'].to_numpy()
+    savetxt(os.path.join(mopath, 'match_term_id_score.dat'), column_stack((keys[ids], Ss, ids)))
+    wf = []
+    for i in range(len(its)):
+        interface_here = its[i]
+        interface_here = trans_to_bottom(interface_here)
+        interface_here = add_sele_dyn(interface_here)
+        incar_update = {"LDIPOL": True, "IDIPOL": 3, "LWAVE":False, "EDIFF":1e-5}
+        fw1, fw2 = NDPDPWF(interface_here, project_name, NCORE, db_file, vasp_cmd, \
+                             {'project_name': project_name, 'job': f'it_{i}'}, \
+                             {"_launch_dir": os.path.join(mopath, f'it_{i}'), 'job': f'it_{i}'}, \
+                            incar_update)
+        wf.append(fw1)
+        wf.append(fw2)
+        fw_se = SlabEnergyWorkflows(interface_here, ISRker.unique_matches[keys[i][0]], project_name, NCORE, db_file, vasp_cmd, relax = False, calc_initial_film = False, tag = f'_{i}')
+        wf += fw_se
+    wf = Workflow(wf)
+    wf.name = project_name
+    return wf

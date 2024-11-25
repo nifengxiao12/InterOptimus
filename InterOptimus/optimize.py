@@ -27,7 +27,7 @@ from scipy.stats import pearsonr
 from scipy.stats.mstats import spearmanr
 from skopt.space import Real, Integer
 import math
-from InterOptimus.VaspWorkFlow import RegistrationScan, ScoreRankerWF
+from InterOptimus.VaspWorkFlow import RegistrationScan, ScoreRankerWF, AllMatchTermOPWF
 from InterOptimus.tool import get_one_interface, read_key_item, get_it_core_indices
 
 class interface_pre_optimizer:
@@ -706,23 +706,35 @@ class interface_score_ranker:
             distwithbefore = norm(repeat([cart_here], num_of_sampled, axis = 0) - rbt_carts, axis = 1)
             if min(distwithbefore) > rbt_non_closer_than:
         """
+    def PatchAllMatchTermOPWF(self, project_name, NCORE, db_file, vasp_cmd):
+        df = self.get_global_rank_info()
+        its = []
+        keys = array(list(self.opt_info_dict.keys()))
+        for i in range(len(keys)):
+            its.append(self.get_interface_by_id(i))
+        return AllMatchTermOPWF(self, its, df, keys, project_name, NCORE, db_file, vasp_cmd)
+        
 def read_pickle(file):
     with open(file, 'rb') as f:
         return pickle.load(f)
 
 def calculate_correlation(scores, energies):
-    sp_correlation_all, _ = pearsonr(scores, energies)
-    n = len(scores)
-    highest_20_ids = argsort(energies)[arange(int(n/2))]
-    scores_high = scores[highest_20_ids]
-    energies_high_score = energies[highest_20_ids]
-    sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
-    entropy_s = normalized_entropy_continuous(scores)
-    correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
+    sp_correlation_all = spearmanr(scores, energies).correlation
+    #sp_correlation_all, _ = pearsonr(scores, energies)
+    #n = len(scores)
+    #highest_20_ids = argsort(energies)[arange(int(n/2))]
+    #scores_high = scores[highest_20_ids]
+    #energies_high_score = energies[highest_20_ids]
+    #sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
+    #entropy_s = normalized_entropy_continuous(scores)
+    #correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
+    correlation = sp_correlation_all
     if math.isnan(correlation):
-        correlation = 0
-    print(f"cor: {correlation}, entropy: {entropy_s}, L: {correlation - 0.3 * entropy_s}")
-    return correlation - 0.3 * entropy_s
+        correlation = 1
+    #print(f"cor: {correlation}, entropy: {entropy_s}, L: {correlation - 0.3 * entropy_s}")
+    print(f"cor: {correlation}")
+    #return correlation - 0.3 * entropy_s
+    return correlation
 
 def normalized_entropy_continuous(y, num_bins=100):
     counts, _ = np.histogram(y, bins=num_bins, range=(0, 1), density=True)
@@ -808,13 +820,13 @@ def HPoptimizer(hptrainer, n_calls):
         Integer(2, 15, name='n_max'),
         Integer(2, 15, name='l_max'),
         Real(1, 5, name = 'soapWr0'),
-        Real(1, 2, name = 'soapWc'),
-        Real(1, 2, name = 'soapWd'),
+        Real(0.5, 2, name = 'soapWc'),
+        Real(0.5, 2, name = 'soapWd'),
         Integer(2,50, name = 'soapWm'),
-        Real(0.5, 3, name = 'KFsoap'),
+        Real(0.5, 10, name = 'KFsoap'),
         Real(0, 0.5, name = 'KFrp'),
-        Real(0, 1, name = 'KFen'),
-        Real(1+1e-4, 1.2, name = 'en_cut'),
+        Real(0, 2, name = 'KFen'),
+        Real(1+1e-4, 1.5, name = 'en_cut'),
     ]
     # Run the optimization with progress bar
     result = trial_with_progress(hptrainer.trial, n_calls=n_calls, random_state=99)

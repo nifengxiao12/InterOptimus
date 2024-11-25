@@ -5,7 +5,9 @@ from atomate.vasp.database import VaspCalcDb
 from fireworks import LaunchPad
 from InterOptimus.MPsoap import MPsearch, stct_help_class, soap_data_generator
 from InterOptimus.tool import read_key_item
-from scipy.stats import pearsonr
+#from scipy.stats import pearsonr
+from scipy.stats.mstats import spearmanr
+
 from InterOptimus.VaspWorkFlow import LatticeRelaxWF, readDBvasp
 import numpy as np
 import shutil
@@ -164,7 +166,7 @@ def HPtraining(n_calls = 100, training_y = 'energies'):
 
 def draw_xs_ys(xs, ys, i, areas, training_y):
     fig, ax = plt.subplots(figsize = (5,5))
-    cor, _ = pearsonr(xs, ys)
+    cor = spearmanr(xs, ys).correlation
     ax.scatter(xs, ys, alpha = 0.4, s =400)
     ax.scatter(xs[ys.argmin()], ys[ys.argmin()], alpha = 0.5, s = 400, \
     c = 'none', edgecolors='C03', linewidth = 5)
@@ -238,7 +240,7 @@ def OutputHPtrainingResults():
     draw_xs_ys(np.array(all_xs), np.array(all_ys), (-1,-1), IDG.areas, training_y)
     save_pickle('SvE_by_BP_{training_y}.pkl', results_by_BPs)
 
-def HighThrougput(delta_S):
+def ISKerInit():
     set_data = read_key_item('INTAR')
     HPT_data = read_key_item('RDSANAR')
     training_y = 'energies'
@@ -262,6 +264,29 @@ def HighThrougput(delta_S):
                             kernel_factors = {'soap':KFsoap, 'rp':KFrp, 'en':KFen}, en_cut = en_cut)
     
     ISRker.global_searching()
+    return ISRker
+
+def HighThrougput(delta_S = 0.1):
+    ISRker = ISKerInit()
+    set_data = read_key_item('INTAR')
     wf = ISRker.PatchHighThroughputWF(delta_S, 'HighTP', set_data['NCORE'], set_data['DBFILE'], vasp_cmd = set_data['VASPCMD'])
     lp = LaunchPad.auto_load()
     lp.add_wf(wf)
+
+def PatchISRkerBenchMark():
+    ISRker = ISKerInit()
+    set_data = read_key_item('INTAR')
+    wf = ISRker.PatchAllMatchTermOPWF('ISRkerBenchMark', set_data['NCORE'], set_data['DBFILE'], vasp_cmd = set_data['VASPCMD'])
+    lp = LaunchPad.auto_load()
+    lp.add_wf(wf)
+
+def ReadISRkerBenchMark():
+    db = VaspCalcDb.from_db_file(set_data['DBFILE'])
+    MTdata = np.loadtxt('match_term_id_score.dat')
+    for i in range(len(MTdata)):
+        it_label = (MTdata[i][0], MTdata[i][1])
+        it_id = MTdata[i][-1]
+        it_score = MTdata[i][-2]
+        substrate_E = readDBvasp(db, {'job':f'substrate_{it_id}', 'project_name':'ISRkerBenchMark'})
+        film_t_E = readDBvasp(db, {'job':f'film_t_{it_id}', 'project_name':'ISRkerBenchMark'})
+        it_E = readDBvasp(db, {'job':f'it_{it_id}', 'project_name':'ISRkerBenchMark'})

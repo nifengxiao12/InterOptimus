@@ -7,7 +7,7 @@ import numpy as np
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.core.operations import SymmOp
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from MPsoap import to_ase
+from InterOptimus.MPsoap import to_ase
 from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 import sys
 import time

@@ -1,13 +1,49 @@
-from CNID import calculate_cnid_in_supercell
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
 import numpy as np
 from pymatgen.analysis.interfaces.zsl import fast_norm
-from CNID import triple_dot
+from InterOptimus.CNID import triple_dot, calculate_cnid_in_supercell
 from itertools import combinations
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
+import os
+
+def sort_list(array_to_sort, keys):
+    """
+    sort list by keys
+    
+    Args:
+    array_to_sort (array): array to sort
+    keys (array): sorting keys
+    
+    Return:
+    (array): sorted array
+    """
+    combined_array = []
+    for id, row in enumerate(array_to_sort):
+        combined_array.append((keys[id], row))
+    combined_array_sorted = sorted(combined_array, key = lambda x: x[0])
+    keys_sorted, array_sorted = zip(*combined_array_sorted)
+    return list(array_sorted)
+
+def apply_cnid_rbt(interface, x, y, z):
+    """
+    apply rigid body translation to an interface.
+    
+    Args:
+    interface (Interface): interface before translation
+    x (float), y (float): fractional cnid coordinates
+    z: fractional coordinates in c
+    Return:
+    interface (Interface): interface after translation
+    """
+    CNID = calculate_cnid_in_supercell(interface)[0]
+    CNID_translation = TranslateSitesTransformation(interface.film_indices, x*CNID[:,0] + y*CNID[:,1] + [0, 0, z])
+    return CNID_translation.apply_transformation(interface)
+
+def existfilehere(filename):
+    return os.path.isfile(os.path.join(os.getcwd(), filename))
 
 def get_termination_indices(slab, ftol= 0.25):
     """
@@ -196,3 +232,10 @@ def add_sele_dyn(it):
     mobility_mtx[sub_bot_indices] = [False, False, False]
     it.add_site_property('selective_dynamics', mobility_mtx)
     return it
+
+def add_sele_dyn_slab(slab):
+    sub_bot_indices = get_termination_indices(slab)[0]
+    mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
+    mobility_mtx[sub_bot_indices] = [False, False, False]
+    slab.add_site_property('selective_dynamics', mobility_mtx)
+    return slab

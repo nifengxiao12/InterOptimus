@@ -1,0 +1,8 @@
+pymatgen
+interfacemaster
+Dscribe
+scikit-optimize
+matplotlib
+atomate
+fireworks
+adjustText

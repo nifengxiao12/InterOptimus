@@ -7,7 +7,7 @@ from dscribe.descriptors import SOAP
 from ase.io import read as aR
 from numpy import *
 from pymatgen.core.periodic_table import Element
-from pymatgen.ext.matproj import MPRester
+from mp_api.client import MPRester
 import os
 import itertools
 import shutil
@@ -16,6 +16,7 @@ from scipy.spatial.distance import pdist
 from tqdm import tqdm
 import pickle
 import time
+from InterOptimus.tool import read_key_item, existfilehere
 
 def get_Z(struct):
     """given structure, get element names.
@@ -133,7 +134,6 @@ class soap_data_generator:
     """
     @classmethod
     def from_dir(cls):
-        from core import read_key_item
         set_data = read_key_item('INTAR')
         substrate_conv = Structure.from_file('SBS.cif')
         film_conv = Structure.from_file('FLM.cif')
@@ -208,6 +208,7 @@ class soap_data_generator:
         cluster the soap descriptors by element names.
         """
         self.by_element_dict = {}
+        min_dists_saved = existfilehere('min_dists.dat')
         for i in self.elements:
             self.by_element_dict[i] = {}
             self.by_element_dict[i]['soap_descs'] = \
@@ -221,6 +222,11 @@ class soap_data_generator:
             
             self.by_element_dict[i]['min_nb_distances'] = \
              self.min_nb_distances[self.soap_elements == i]
+            if not min_dists_saved:
+                with open('min_dists.dat','a') as f:
+                    for distance in self.min_nb_distances[self.soap_elements == i]:
+                        f.write(f'{distance} ')
+                    f.write(f'\n')
             
             self.by_element_dict[i]['EN_diffs'] = \
              self.EN_diffs[self.soap_elements == i]
@@ -328,6 +334,13 @@ class soap_analyzer:
                                       get_EN_diff_crystall(self.struct, self.non_equi_sites_indices[i]))
                 self.soap_infos.append(this_soap)
 
+def get_delta_distances(atom_index, structure, cutoff):
+    neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
+    if len(neighbors) > 0:
+        return array([neighbor[1] for neighbor in neighbors])
+    else:
+        return array([cutoff])
+    
 def get_min_nb_distance(atom_index, structure):
     """
     get the minimum neighboring distance for certain atom in a structure

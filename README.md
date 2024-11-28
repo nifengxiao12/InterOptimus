@@ -4,5 +4,5 @@ An efficient python package for Interface Simulation.
 2. Symmetry analysis to screen out identical matching and termination conditions;
 3. Structure pre-optimization by CHGNet-predicted interface energy.
 
-Install
+Install\n
 `pip install . `

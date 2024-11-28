@@ -5,5 +5,4 @@ An efficient python package for Interface Simulation.
 3. Structure pre-optimization by CHGNet-predicted interface energy.
 
 Install
-
 `pip install . `

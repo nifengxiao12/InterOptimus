@@ -26,7 +26,7 @@ setup(
         "fireworks",
         "adjustText",
         "ipywidgets",
-        "tqdm",
-        
+        "tqdm", 
+        "chgnet",
     ]
 )

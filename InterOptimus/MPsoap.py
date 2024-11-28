@@ -7,7 +7,7 @@ from dscribe.descriptors import SOAP
 from ase.io import read as aR
 from numpy import *
 from pymatgen.core.periodic_table import Element
-from pymatgen.ext.matproj import MPRester
+from mp_api.client import MPRester
 import os
 import itertools
 import shutil
@@ -336,7 +336,10 @@ class soap_analyzer:
 
 def get_delta_distances(atom_index, structure, cutoff):
     neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
-    return array([neighbor[1] for neighbor in neighbors])
+    if len(neighbors) > 0:
+        return array([neighbor[1] for neighbor in neighbors])
+    else:
+        return array([cutoff])
     
 def get_min_nb_distance(atom_index, structure):
     """

@@ -7,14 +7,19 @@ from InterOptimus.MPsoap import MPsearch, stct_help_class, soap_data_generator
 from InterOptimus.tool import read_key_item
 #from scipy.stats import pearsonr
 from scipy.stats.mstats import spearmanr
-
+from chgnet.model.model import CHGNet
 from InterOptimus.VaspWorkFlow import LatticeRelaxWF, readDBvasp
+from InterOptimus.tool import trans_to_bottom
 import numpy as np
 import shutil
 import os
 import pickle
 import matplotlib.pyplot as plt
 import pandas as pd
+
+from fireworks import FiretaskBase
+
+#class generate
 
 def RelaxCryst():
     set_data = read_key_item('INTAR')
@@ -170,14 +175,14 @@ def draw_xs_ys(xs, ys, i, areas, training_y):
     ax.scatter(xs, ys, alpha = 0.4, s =400)
     ax.scatter(xs[ys.argmin()], ys[ys.argmin()], alpha = 0.5, s = 400, \
     c = 'none', edgecolors='C03', linewidth = 5)
-    ax.scatter(xs[xs.argmax()], ys[xs.argmax()], alpha = 0.5, s = 400, \
+    ax.scatter(xs[xs.argmin()], ys[xs.argmin()], alpha = 0.5, s = 400, \
     c = 'none', edgecolors='C01', linewidth = 5)
-    min_energy_by_score = ys[xs.argmax()]
+    min_energy_by_score = ys[xs.argmin()]
     min_energy = ys.min()
     delta_E = (min_energy_by_score - min_energy) * 16.02176634/areas[i[0]]
-    delta_S = xs.max() - xs[ys.argmin()]
-    f_rate = len(xs[xs > xs[ys.argmin()]])/len(xs)
-    ax.text(0.95, 0.95, f'$r$ = {np.around(cor,2)}\n$f$ = {np.around(f_rate,2)}\n$\Delta$E = {np.around(delta_E,2)} J/m$^2$\n$\Delta$S = {np.around(delta_S,2)}',
+    #delta_S = xs.min() - xs[ys.argmin()]
+    f_rate = len(xs[xs < xs[ys.argmin()]])/len(xs)
+    ax.text(0.95, 0.95, f'$r$ = {np.around(cor,2)}\n$f$ = {np.around(f_rate,2)}\n$\Delta$E = {np.around(delta_E,2)} J/m$^2$',
         transform=ax.transAxes,
         fontsize=18,
         verticalalignment='top',
@@ -240,6 +245,32 @@ def OutputHPtrainingResults():
     draw_xs_ys(np.array(all_xs), np.array(all_ys), (-1,-1), IDG.areas, training_y)
     save_pickle('SvE_by_BP_{training_y}.pkl', results_by_BPs)
 
+def OutputCHGnetResults():
+    chgnet = CHGNet.load()
+    set_data = read_key_item('INTAR')
+    DFT_results = read_pickle('DFT_results.pkl')
+    training_y = 'energies'
+    all_xs, all_ys = [], []
+    IDG = InputDataGenerator()
+    wp = WorkPatcher(IDG.unique_matches, '', IDG.film, IDG.substrate)
+    wp.param_parse(project_name = set_data['PNAME'], termination_ftol = set_data['TFTOL'], slab_length = set_data['SLBLTH'], c_periodic = set_data['CPRD'], vacuum_over_film = set_data['VCOFLM'])
+    wp.get_all_unique_terminations()
+    results_by_BPs = {}
+    for i in list(DFT_results.keys()):
+        xs, ys = [], DFT_results[i][training_y]
+        for j in DFT_results[i]['xyzs']:
+            interface_here = trans_to_bottom(wp.get_interface_by_key(i[0], i[1], j))
+            xs.append(chgnet.predict_structure(interface_here)['e'] * len(interface_here))
+        results_by_BPs[i] = np.column_stack((xs, ys))
+        xs = np.array(xs)
+        all_xs += list(xs)
+        all_ys += list(ys)
+        draw_xs_ys(xs, ys, i, IDG.areas, training_y)
+
+    results_by_BPs[(-1,-1)] = np.column_stack((all_xs, all_ys))
+    draw_xs_ys(np.array(all_xs), np.array(all_ys), (-1,-1), IDG.areas, training_y)
+    save_pickle('SvE_by_BP_{training_y}.pkl', results_by_BPs)
+
 def ISKerInit():
     set_data = read_key_item('INTAR')
     HPT_data = read_key_item('RDSANAR')
@@ -279,14 +310,31 @@ def PatchISRkerBenchMark():
     wf = ISRker.PatchAllMatchTermOPWF('ISRkerBenchMark', set_data['NCORE'], set_data['DBFILE'], vasp_cmd = set_data['VASPCMD'])
     lp = LaunchPad.auto_load()
     lp.add_wf(wf)
-
+    
+def read_pickle(file):
+    with open(file, 'rb') as f:
+        return pickle.load(f)
+        
 def ReadISRkerBenchMark():
+    set_data = read_key_item('INTAR')
     db = VaspCalcDb.from_db_file(set_data['DBFILE'])
-    MTdata = np.loadtxt('match_term_id_score.dat')
+    MTdata = np.loadtxt('ISRkerBenchMark/match_term_id_score.dat')
+    scores = MTdata[:,2]
+    it_ids = np.array(MTdata[:,-1], dtype = int)
+    match_ids = np.array(MTdata[:,0], dtype = int)
+    term_ids = np.array(MTdata[:,1], dtype = int)
+    areas = np.array(read_pickle('areas.pkl'))[match_ids]
+    binding_Es = []
+    slab_Es = []
+    it_Es = []
     for i in range(len(MTdata)):
-        it_label = (MTdata[i][0], MTdata[i][1])
-        it_id = MTdata[i][-1]
-        it_score = MTdata[i][-2]
+        it_id = int(MTdata[i][-1])
         substrate_E = readDBvasp(db, {'job':f'substrate_{it_id}', 'project_name':'ISRkerBenchMark'})
         film_t_E = readDBvasp(db, {'job':f'film_t_{it_id}', 'project_name':'ISRkerBenchMark'})
         it_E = readDBvasp(db, {'job':f'it_{it_id}', 'project_name':'ISRkerBenchMark'})
+        slab_Es.append(film_t_E + substrate_E)
+        it_Es.append(it_E)
+        binding_Es.append((substrate_E+film_t_E-it_E)/areas[i]*16.02176634)
+    np.savetxt('ISRkerBenchMark_results.dat', np.column_stack((it_ids, match_ids, term_ids, scores, binding_Es, slab_Es, it_Es)), fmt = '%i %i %i %f %f %f %f')
+        
+        

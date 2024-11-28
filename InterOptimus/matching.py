@@ -20,6 +20,7 @@ from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 #from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 #from MPsoap import to_ase
 from InterOptimus.equi_term import pair_fit
+from InterOptimus.tool import sort_list
 import matplotlib.pyplot as plt
 from adjustText import adjust_text
 
@@ -164,7 +165,7 @@ def get_area_match(match):
     """
     return norm(cross(match.substrate_sl_vectors[0], match.substrate_sl_vectors[1]))
     
-def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer):
+def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_millers, substrate_millers):
     """
     given substrate, film lattice structures, \
     get non-identical matches and identical match groups
@@ -178,7 +179,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer):
     equivalent_matches (list): clustered identical matches.
     unique_areas (list): list of matching areas of non-identical matches
     """
-    matches = list(sub_analyzer.calculate(film=film, substrate=substrate))
+    matches = list(sub_analyzer.calculate(film=film, substrate=substrate, film_millers = film_millers, substrate_millers = substrate_millers))
     areas = []
     for i in matches:
         areas.append(get_area_match(i))
@@ -284,25 +285,7 @@ def get_area(v1, v2):
     """
     return norm(cross(v1,v2))
 
-def sort_list(array_to_sort, keys):
-    """
-    sort list by keys
-    
-    Args:
-    array_to_sort (array): array to sort
-    keys (array): sorting keys
-    
-    Return:
-    (array): sorted array
-    """
-    combined_array = []
-    for id, row in enumerate(array_to_sort):
-        combined_array.append((keys[id], row))
-    combined_array_sorted = sorted(combined_array, key = lambda x: x[0])
-    keys_sorted, array_sorted = zip(*combined_array_sorted)
-    return list(array_sorted)
-
-def interface_searching(substrate_conv, film_conv, sub_analyzer):
+def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers = None, substrate_millers = None):
     """
     given substrate, film lattice structures, \
     get non-identical matches and identical match groups
@@ -324,7 +307,7 @@ def interface_searching(substrate_conv, film_conv, sub_analyzer):
                  film_conv.get_primitive_structure(),\
                  substrate_conv,\
                  film_conv,\
-                 sub_analyzer)
+                 sub_analyzer, film_millers, substrate_millers)
     unique_matches_indices_data = []
     equivalent_matches_indices_data = []
     
@@ -715,6 +698,7 @@ class EquiMatchSorter:
         self.sort_zsl_match_results()
         self.generate_all_match_data()
         self.get_indices_map()
+        self.unique_matches = unique_matches
     def sort_zsl_match_results(self):
         type_id = 0
         all_matche_data = {}
@@ -735,7 +719,11 @@ class EquiMatchSorter:
         for i in self.unique_matche_data.keys():
             combs = get_identical_pairs(i, self.film, self.substrate)
             for j in combs:
-                new_dict[j] = self.unique_matche_data[i]
+                if j not in new_dict.keys():
+                    new_dict[j] = self.unique_matche_data[i]
+                else:
+                    for k in self.unique_matche_data[i].keys():
+                        new_dict[j][k] = self.unique_matche_data[i][k]
         self.all_matche_data = new_dict
         #print(new_dict)
     def get_indices_map(self):
@@ -764,5 +752,34 @@ class EquiMatchSorter:
                 X, Y = substrate_matching_data[i]['XY']
                 f.write(f"{i[0]} {i[1]} {i[2]} {X} {Y} {substrate_matching_data[i]['type_list']}\n" )
         plot_matching_data(matching_data, names, save_filename, show_millers, show_legend, special)
-        plot_matching_data_num(matching_data, names, save_filename)
-        plot_matching_data_strain(matching_data, names, save_filename)
+        #plot_matching_data_num(matching_data, names, save_filename)
+        #plot_matching_data_strain(matching_data, names, save_filename)
+
+    def plot_unique_matches(self, filename = 'unique_matches.jpg'):
+        x = []
+        strains = []
+        areas = []
+        ct = 0
+        for i in self.unique_matches:
+            strains.append(i.von_mises_strain)
+            areas.append(i.match_area)
+            x.append(ct + 1)
+            ct+=1
+
+        plt.rc('font', family='arial')
+        plt.rc('text', usetex=False)
+        x = x
+        y1 = areas
+        y2 = strains
+
+        width = 0.35
+        x_pos = np.arange(len(x))
+        offset = 0.1
+        fig, ax1 = plt.subplots(figsize = (len(x)*2,5))
+        ax1.bar(x_pos - width/2 + offset, y1, width, alpha=0.6, label='matching area', color ='C00')
+
+        ax2.tick_params(axis='y', labelsize=15, color = 'C01', labelcolor = 'C01')
+
+        fig.legend(loc='upper left', bbox_to_anchor=(0.5, 1.15), fontsize = 15)
+        plt.tight_layout()
+        fig.savefig(filename, dpi = 600, format='jpg')

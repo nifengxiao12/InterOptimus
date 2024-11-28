@@ -188,9 +188,10 @@ def RP_kernel(t_min_d, ref_ds, rpsv_pow_func):
 """
 
 def RP_kernel(ref_ds, close_ds, c):
-    return - c * sum( ((ref_ds-close_ds)/ref_ds)**3 ) **2
+    return - c * sum( ((ref_ds-close_ds)/ref_ds)**3 )**2
 
 def EN_kernel(t_EN, ref_EN):
+    """
     if t_EN * ref_EN > 0:
         if abs(t_EN) < abs(ref_EN):
             kns = t_EN/ref_EN
@@ -198,6 +199,10 @@ def EN_kernel(t_EN, ref_EN):
             kns = 1
     else:
         kns = 0
+    return kns
+    """
+    kns = 1 - abs(t_EN - ref_EN)/abs(ref_EN)
+    kns[kns < 0] = 0
     return kns
 
 def registration_minimizer(itopt, n_calls):
@@ -318,6 +323,17 @@ class WorkPatcher:
         for i in xyzs:
             scores.append(1 - itopt.trial(i))
         return scores
+    
+    def get_interface_by_key(self, match_id, termination_id, xyz):
+        cib = CoherentInterfaceBuilder(film_structure=self.film,
+                               substrate_structure=self.substrate,
+                               film_miller=self.unique_matches[match_id].film_miller,
+                               substrate_miller=self.unique_matches[match_id].substrate_miller,
+                               zslgen=SubstrateAnalyzer(max_area=200), termination_ftol=self.termination_ftol, label_index=True,\
+                               filter_out_sym_slabs=False)
+        cib.zsl_matches = [self.unique_matches[match_id]]
+        return get_one_interface(cib, self.all_unique_terminations[match_id][termination_id], self.slab_length, xyz, \
+                self.vacuum_over_film, self.c_periodic)
     
     def PatchRegistrationScan(self, match_id, termination_id, atom_non_closer_than, n_calls = 50, \
                                 rbt_non_closer_than = 0.5, NCORE = 12, db_file = '', vasp_cmd = ''):
@@ -719,16 +735,17 @@ def read_pickle(file):
         return pickle.load(f)
 
 def calculate_correlation(scores, energies):
-    sp_correlation_all = spearmanr(scores, energies).correlation
-    #sp_correlation_all, _ = pearsonr(scores, energies)
+    low_ids = where(energies < 1/2 * (min(energies)+ max(energies)))[0]
+    sp_correlation_all = spearmanr(scores[low_ids], energies[low_ids]).correlation
+    #ps_correlation_all, _ = pearsonr(scores[low_ids], energies[low_ids])
     #n = len(scores)
     #highest_20_ids = argsort(energies)[arange(int(n/2))]
     #scores_high = scores[highest_20_ids]
     #energies_high_score = energies[highest_20_ids]
     #sp_correlation_high = spearmanr(scores_high, energies_high_score).correlation
     #entropy_s = normalized_entropy_continuous(scores)
-    #correlation = 0.7*sp_correlation_all + 0.3*sp_correlation_high
     correlation = sp_correlation_all
+    #correlation = 0.3*sp_correlation_all + 0.7*ps_correlation_all
     if math.isnan(correlation):
         correlation = 1
     #print(f"cor: {correlation}, entropy: {entropy_s}, L: {correlation - 0.3 * entropy_s}")
@@ -823,9 +840,9 @@ def HPoptimizer(hptrainer, n_calls):
         Real(0.5, 2, name = 'soapWc'),
         Real(0.5, 2, name = 'soapWd'),
         Integer(2,50, name = 'soapWm'),
-        Real(0.5, 10, name = 'KFsoap'),
-        Real(0, 0.5, name = 'KFrp'),
-        Real(0, 2, name = 'KFen'),
+        Real(0.5, 2, name = 'KFsoap'),
+        Real(0, 0.1, name = 'KFrp'),
+        Real(0.99, 1, name = 'KFen'),
         Real(1+1e-4, 1.5, name = 'en_cut'),
     ]
     # Run the optimization with progress bar

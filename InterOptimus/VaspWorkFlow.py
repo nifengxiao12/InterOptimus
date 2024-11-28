@@ -18,12 +18,12 @@ import os
 from InterOptimus.tool import get_one_interface, trans_to_bottom, add_sele_dyn, add_sele_dyn_slab
 
 def get_potcar_dict():
-    return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu_pv', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu', 'F': 'F', 'Fe': 'Fe_pv', 'Ga': 'Ga_d', 'Gd': 'Gd', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn', 'Mo': 'Mo_pv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_pv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os_pv', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re_pv', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
+    return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu_pv', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu', 'F': 'F', 'Fe': 'Fe_pv', 'Ga': 'Ga_d', 'Gd': 'Gd', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn_pv', 'Mo': 'Mo_pv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_pv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os_pv', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re_pv', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
 
 def get_potcar(structure):
     return Potcar([get_potcar_dict()[i.symbol] for i in structure.elements], functional = 'PBE_54')
 
-def CstRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, Kdense = 500):
+def CstRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, Kdense = 200):
     potcar = get_potcar(structure)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)
     custom_encut = max_encut * ENCUT_scale
@@ -45,7 +45,7 @@ def CstRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, Kdense = 500):
     return MPRelaxSet(structure, user_incar_settings = user_incar_settings, \
     user_potcar_functional='PBE_54', user_potcar_settings = get_potcar_dict(), user_kpoints_settings = {'reciprocal_density': Kdense})
 
-def ITRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, c_periodic = False, EDIFF = 1e-4, Kdense = 500):
+def ITRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, c_periodic = False, EDIFF = 1e-4, Kdense = 200):
     potcar = get_potcar(structure)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)
     custom_encut = max_encut * ENCUT_scale
@@ -81,7 +81,7 @@ def ITRelaxSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, c_periodic
     return MPRelaxSet(structure, user_incar_settings = user_incar_settings, \
     user_potcar_functional='PBE_54', user_potcar_settings = get_potcar_dict(), user_kpoints_settings = {'reciprocal_density': Kdense})
 
-def ITStaticSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, EDIFF = 1e-5, Kdense = 500):
+def ITStaticSet(structure, ENCUT_scale = 1, NCORE = 12, LDIPOL = True, EDIFF = 1e-5, Kdense = 200):
     potcar = get_potcar(structure)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)
     custom_encut = max_encut * ENCUT_scale
@@ -220,8 +220,6 @@ def LatticeRelaxWF(film_path, substrate_path, project_name, NCORE, db_file, vasp
                 VaspToDb(db_file = db_file, additional_fields = {'project_name': project_name, 'it': f'{i}'})
             ], name = f'{project_name}_lattice', spec={"_launch_dir": os.path.join(mopath,f'{i}')})
         wf.append(wf_h)
-    wf = Workflow(wf)
-    wf.name = project_name
     return wf
 
 def RegistrationScan(cib, project_name, xyzs, termination, slab_length, vacuum_over_film, c_periodic, NCORE, db_file, vasp_cmd):
@@ -321,7 +319,7 @@ def AllMatchTermOPWF(ISRker, its, df, keys, project_name, NCORE, db_file, vasp_c
     os.mkdir(mopath)
     Ss = df['$S$'].to_numpy()
     ids = df['id'].to_numpy()
-    savetxt(os.path.join(mopath, 'match_term_id_score.dat'), column_stack((keys[ids], Ss, ids)))
+    savetxt(os.path.join(mopath, 'match_term_id_score.dat'), column_stack((keys[ids], Ss, ids)), fmt = '%i %i %f %i')
     wf = []
     for i in range(len(its)):
         interface_here = its[i]
@@ -339,3 +337,5 @@ def AllMatchTermOPWF(ISRker, its, df, keys, project_name, NCORE, db_file, vasp_c
     wf = Workflow(wf)
     wf.name = project_name
     return wf
+
+

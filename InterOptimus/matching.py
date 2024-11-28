@@ -778,6 +778,18 @@ class EquiMatchSorter:
         fig, ax1 = plt.subplots(figsize = (len(x)*2,5))
         ax1.bar(x_pos - width/2 + offset, y1, width, alpha=0.6, label='matching area', color ='C00')
 
+        ax2 = ax1.twinx()
+
+        ax2.bar(x_pos + width/2 + offset, array(y2)*100, width, alpha=0.6, label='strain', color ='C01')
+
+        ax1.set_xlabel('type', fontsize = 20)
+        ax1.set_ylabel('matching area $\AA^2$', color='C00', fontsize = 20)
+        ax2.set_ylabel('strain %', color='C01', fontsize = 20)
+
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(x)
+        ax1.tick_params(axis='x', labelsize=15)
+        ax1.tick_params(axis='y', labelsize=15, color = 'C00', labelcolor = 'C00')
         ax2.tick_params(axis='y', labelsize=15, color = 'C01', labelcolor = 'C01')
 
         fig.legend(loc='upper left', bbox_to_anchor=(0.5, 1.15), fontsize = 15)

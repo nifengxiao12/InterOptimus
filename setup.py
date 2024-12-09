@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="InterOptimus",
-    version="1.0.0",
+    version="0.0.0",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High througput simulation making crystalline interfaces",
@@ -27,7 +27,6 @@ setup(
         "adjustText",
         "ipywidgets",
         "tqdm",
-        "ys_mlipdk",
-        
+        "mlipdockers",
     ]
 )

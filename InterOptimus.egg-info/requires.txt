@@ -6,3 +6,6 @@ matplotlib
 atomate
 fireworks
 adjustText
+ipywidgets
+tqdm
+ys_mlipdk

@@ -1,6 +1,16 @@
 LICENSE
 README.md
 setup.py
+InterOptimus/CNID.py
+InterOptimus/MPsoap.py
+InterOptimus/VaspWorkFlow.py
+InterOptimus/__init__.py
+InterOptimus/core.py
+InterOptimus/equi_term.py
+InterOptimus/itworker.py
+InterOptimus/matching.py
+InterOptimus/optimize.py
+InterOptimus/tool.py
 InterOptimus.egg-info/PKG-INFO
 InterOptimus.egg-info/SOURCES.txt
 InterOptimus.egg-info/dependency_links.txt

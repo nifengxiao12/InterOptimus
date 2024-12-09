@@ -4,18 +4,18 @@ from pymatgen.transformations.site_transformations import TranslateSitesTransfor
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from InterOptimus.equi_term import get_non_identical_slab_pairs
-from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list
+from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
-from chgnet.model.model import CHGNet
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate
 from InterOptimus.CNID import calculate_cnid_in_supercell
 from pymatgen.io.vasp.inputs import Potcar
 from pymatgen.io.vasp.sets import MPStaticSet, MPRelaxSet
 import os
 import pandas as pd
+from mlipdockers.core import MlipCalc
 
 def get_env_variable(var_name):
     try:
@@ -111,7 +111,7 @@ def get_default_incar_settings(name, **kwargs):
     else:
         raise ValueError("default inter settings only support 'standard relax', 'standard static', 'interface static' and 'interface relax'")
         
-def get_vasp_input_settings(name, structure, ENCUT_scale = 1.3, update_incar_settings = None, update_potcar_functional = None,
+def get_vasp_input_settings(name, structure, update_incar_settings = None, update_potcar_functional = None,
                             update_potcar_settings = None, update_kpoints_settings = None, **kwargs):
     
     """
@@ -120,7 +120,7 @@ def get_vasp_input_settings(name, structure, ENCUT_scale = 1.3, update_incar_set
     Args:
     name (str): one of 'standard relax', 'standard static', 'interface static', 'interface relax'
     structure (Structure): structure for calculation
-    ENCUT_scale (float): scaling factor of the maximum en_cut in potcars
+    ##ENCUT_scale (float): scaling factor of the maximum en_cut in potcars
     update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
     update_potcar_functional (str): which set of functional to use
     
@@ -138,11 +138,12 @@ def get_vasp_input_settings(name, structure, ENCUT_scale = 1.3, update_incar_set
         user_potcar_functional = 'PBE_54'
     else:
         user_potcar_functional = update_potcar_functional
-
+    """
     potcar = get_potcar(structure, user_potcar_functional)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)
     custom_encut = max_encut * ENCUT_scale
     user_incar_settings['ENCUT'] = custom_encut
+    """
     if name == 'standard relax' or name == 'interface relax':
         return MPRelaxSet(structure, user_incar_settings = user_incar_settings, \
                                        user_potcar_functional=user_potcar_functional, \
@@ -296,12 +297,21 @@ class InterfaceWorker:
         if self.shift_to_bottom:
             interface_here = trans_to_bottom(interface_here)
         return interface_here
-
-    def load_chgnet(self):
+    
+    def set_energy_calculator_docker(self, calc):
         """
-        load chgnet module
+        set energy calculator docker container
+        
+        Args:
+        calc (str): mace, orb-models, sevenn, chgnet, grace-2l
         """
-        self.chgnet = CHGNet.load()
+        self.mc = MlipCalc(image_name = calc)
+    
+    def close_energy_calculator(self):
+        """
+        close energy calculator docker container
+        """
+        self.mc.close()
         
     def sample_xyz_energy(self, params):
         """
@@ -321,53 +331,11 @@ class InterfaceWorker:
             initial_interface = self.get_specified_interface(self.match_id_now, self.term_id_now, [0,0,2])
             xyz[2] = (xyz[2] - 2)/initial_interface.lattice.c
             interface_here = apply_cnid_rbt(initial_interface, xyz[0],xyz[1],xyz[2])
-        self.chg_opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
-        return self.chgnet.predict_structure(interface_here)['e'] * len(interface_here)
-            
-    def optimize_specified_interface_by_chgnet(self, match_id, term_id, n_calls = 50, z_range = (0.5, 3)):
-        """
-        apply bassian optimization for the xyz registration of a specified interface
-
-        Args:
-        match_id (int): unique match id
-        term_id (int): unique term id
-        n_calls (int): number of calls
-        z_range (tuple): sampling range of z
-        """
-        #initialize opt info dict
-        if not hasattr(self, 'chg_opt_results'):
-            self.chg_opt_results = {}
-        self.chg_opt_results[(match_id,term_id)] = {}
-        self.chg_opt_results[(match_id,term_id)]['sampled_interfaces'] = []
-
-        #set match&term id
-        self.match_id_now = match_id
-        self.term_id_now = term_id
-
-        #optimize
-        result = registration_minimizer(self, n_calls, z_range)
-        xs = array(result.x_iters)
-        ys = result.func_vals
-
-        #rank xs by energy
-        xs = xs[argsort(ys)]
-        
-        #list need to be ranked by special function
-        self.chg_opt_results[(match_id,term_id)]['sampled_interfaces'] = \
-        sort_list(self.chg_opt_results[(match_id,term_id)]['sampled_interfaces'], ys)
-
-        #rank energy
-        ys = ys[argsort(ys)]
-
-        #get cartesian xyzs
-        interface = self.get_specified_interface(match_id, term_id)
-        CNID = calculate_cnid_in_supercell(interface)[0]
-        CNID_cart = column_stack((dot(interface.lattice.matrix.T, CNID),[0,0,0]))
-        xs_cart = dot(CNID_cart, xs.T).T + column_stack((zeros(len(xs)), zeros(len(xs)), xs[:,2]))
-        
-        self.chg_opt_results[(match_id,term_id)]['xyzs_ognl'] = xs
-        self.chg_opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
-        self.chg_opt_results[(match_id,term_id)]['supcl_E'] = ys
+        for i in self.it_atom_ids:
+            if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
+                return 0
+        self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
+        return self.mc.calculate(interface_here)
         
     def get_film_substrate_layer_thickness(self, match_id, term_id):
         """
@@ -426,9 +394,9 @@ class InterfaceWorker:
         return (trans_to_bottom(interface_single.film), trans_to_bottom(interface_single.substrate)), \
                 (trans_to_bottom(interface_double.film), trans_to_bottom(interface_double.substrate))
     
-    def get_interface_binding_energy(self, supcl_E, match_id, term_id, area):
+    def get_interface_energy_and_binding_energy(self, supcl_E, match_id, term_id, area):
         """
-        calculate interface energy
+        calculate interface energy & interface binding energy
         
         Args:
         supcl_E: interface supercell energy
@@ -441,16 +409,97 @@ class InterfaceWorker:
         single_pair, double_pair (tuple): slab pairs
         """
         single_pair, double_pair = self.get_decomposition_slabs(match_id, term_id)
-        film_single_E = self.chgnet.predict_structure(single_pair[0])['e'] * len(single_pair[0])
-        film_double_E = self.chgnet.predict_structure(double_pair[0])['e'] * len(double_pair[0])
-        substrate_single_E = self.chgnet.predict_structure(single_pair[1])['e'] * len(single_pair[1])
-        substrate_double_E = self.chgnet.predict_structure(double_pair[1])['e'] * len(double_pair[1])
+        film_single_E = self.mc.calculate(single_pair[0])
+        film_double_E = self.mc.calculate(double_pair[0])
+        substrate_single_E = self.mc.calculate(single_pair[1])
+        substrate_double_E = self.mc.calculate(double_pair[1])
         film_adhe_E = - film_double_E + 2 * film_single_E
         substrate_adhe_E = - substrate_double_E + 2 * substrate_single_E
         return (supcl_E - (film_double_E + substrate_double_E) / 2) / area * 16.02176634, \
                (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634, single_pair, double_pair
     
-    def global_minimization(self, n_calls = 50, z_range = (0.5, 3)):
+    def get_interface_atom_indices(self, match_id, term_id):
+        """
+        get the indices of interface atoms
+        
+        Args:
+        match_id (int): unique match id
+        term_id (int): unique term id
+        
+        Return:
+        indices (array)
+        """
+        interface = self.get_specified_interface(match_id, term_id)
+        ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max = get_it_core_indices(interface)
+        if self.c_periodic:
+            return concatenate((ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max))
+        else:
+            return concatenate((ids_film_min, ids_substrate_max))
+    
+    def optimize_specified_interface_by_mlip(self, match_id, term_id, n_calls = 50, z_range = (0.5, 3), calc = 'mace'):
+        """
+        apply bassian optimization for the xyz registration of a specified interface with the predicted
+        interface energy by machine learning potential
+
+        Args:
+        match_id (int): unique match id
+        term_id (int): unique term id
+        n_calls (int): number of calls
+        z_range (tuple): sampling range of z
+        calc: MLIP calculator (str): mace, orb-models, sevenn, chgnet, grace-2l
+        """
+        #initialize opt info dict
+        if not hasattr(self, 'opt_results'):
+            self.opt_results = {}
+        self.opt_results[(match_id,term_id)] = {}
+        self.opt_results[(match_id,term_id)]['sampled_interfaces'] = []
+
+        #set match&term id
+        self.match_id_now = match_id
+        self.term_id_now = term_id
+        
+        #interface atom indices
+        self.it_atom_ids = self.get_interface_atom_indices(match_id, term_id)
+        
+        #optimize
+        result = registration_minimizer(self, n_calls, z_range)
+        xs = array(result.x_iters)
+        ys = result.func_vals
+
+        #rank xs by energy
+        xs = xs[argsort(ys)]
+        
+        #list need to be ranked by special function
+        self.opt_results[(match_id,term_id)]['sampled_interfaces'] = \
+        sort_list(self.opt_results[(match_id,term_id)]['sampled_interfaces'], ys)
+
+        #rank energy
+        ys = ys[argsort(ys)]
+
+        #get cartesian xyzs
+        interface = self.get_specified_interface(match_id, term_id)
+        CNID = calculate_cnid_in_supercell(interface)[0]
+        CNID_cart = column_stack((dot(interface.lattice.matrix.T, CNID),[0,0,0]))
+        xs_cart = dot(CNID_cart, xs.T).T + column_stack((zeros(len(xs)), zeros(len(xs)), xs[:,2]))
+        
+        self.opt_results[(match_id,term_id)]['xyzs_ognl'] = xs
+        self.opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
+        self.opt_results[(match_id,term_id)]['supcl_E'] = ys
+    
+    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'mace', discut = 0.8):
+        """
+        apply bassian optimization for the xyz registration of all the interfaces with the predicted
+        interface energy by machine learning potential, getting ranked interface energies
+
+        Args:
+        match_id (int): unique match id
+        term_id (int): unique term id
+        n_calls (int): number of calls
+        z_range (tuple): sampling range of z
+        calc (str): MLIP calculator: mace, orb-models, sevenn, chgnet, grace-2l
+        discut: (float): allowed minimum atomic distance for searching
+        """
+        self.discut = discut
         columns = [r'$h_s$',r'$k_s$',r'$l_s$',
                   r'$h_f$',r'$k_f$',r'$l_f$',
                    r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{bd}$ $(J/m^2)$', r'$E_{sp}$',
@@ -459,35 +508,36 @@ class InterfaceWorker:
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
                    r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
         formated_data = []
-        self.load_chgnet()
+        #set docker container
+        self.set_energy_calculator_docker(calc)
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             for i in range(len(self.unique_matches)):
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
                     for j in range(len(self.all_unique_terminations[i])):
                         #optimize
-                        self.optimize_specified_interface_by_chgnet(i, j, n_calls = n_calls, z_range = z_range)
+                        self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         
                         #formated data
                         m = self.unique_matches
                         idt = self.unique_matches_indices_data
                         
                         hkl_f, hkl_s = m[i].film_miller, m[i].substrate_miller
-                        A, epsilon, E_sup = m[i].match_area, m[i].von_mises_strain, self.chg_opt_results[(i,j)]['supcl_E'][0]
+                        A, epsilon, E_sup = m[i].match_area, m[i].von_mises_strain, self.opt_results[(i,j)]['supcl_E'][0]
                         uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                         uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                         
                         ##calculate adhesive & interface energy
-                        it_E, bd_E, single_pair, double_pair = self.get_interface_binding_energy(E_sup, i, j, A)
+                        it_E, bd_E, single_pair, double_pair = self.get_interface_energy_and_binding_energy(E_sup, i, j, A)
                         
                         ##save single double slabs
-                        self.chg_opt_results[(i,j)]['single_slabs'] = {}
-                        self.chg_opt_results[(i,j)]['single_slabs']['film'] = single_pair[0]
-                        self.chg_opt_results[(i,j)]['single_slabs']['substrate'] = single_pair[1]
+                        self.opt_results[(i,j)]['single_slabs'] = {}
+                        self.opt_results[(i,j)]['single_slabs']['film'] = single_pair[0]
+                        self.opt_results[(i,j)]['single_slabs']['substrate'] = single_pair[1]
                         
-                        self.chg_opt_results[(i,j)]['double_slabs'] = {}
-                        self.chg_opt_results[(i,j)]['double_slabs']['film'] = double_pair[0]
-                        self.chg_opt_results[(i,j)]['double_slabs']['substrate'] = double_pair[1]
+                        self.opt_results[(i,j)]['double_slabs'] = {}
+                        self.opt_results[(i,j)]['double_slabs']['film'] = double_pair[0]
+                        self.opt_results[(i,j)]['double_slabs']['substrate'] = double_pair[1]
                         formated_data.append(
                                     [hkl_f[0], hkl_f[1], hkl_f[2],\
                                     hkl_s[0], hkl_s[1], hkl_s[2], \
@@ -498,6 +548,8 @@ class InterfaceWorker:
                                     uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
                         term_pbar.update(1)
                 match_pbar.update(1)
-                
         self.global_optimized_data = pd.DataFrame(formated_data, columns = columns)
         self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{it}$ $(J/m^2)$')
+        
+        #close docker container
+        self.close_energy_calculator()

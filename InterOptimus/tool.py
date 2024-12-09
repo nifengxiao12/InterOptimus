@@ -9,6 +9,23 @@ from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
 import os
 
+def get_min_nb_distance(atom_index, structure, cutoff):
+    """
+    get the minimum neighboring distance for certain atom in a structure
+    
+    Args:
+    atom_index (int): atom index in the structure
+    structure (Structure)
+    
+    Return:
+    (float): nearest neighboring distance
+    """
+    neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
+    if len(neighbors) == 0:
+        return np.inf
+    else:
+        return min([neighbor[1] for neighbor in neighbors])
+
 def sort_list(array_to_sort, keys):
     """
     sort list by keys

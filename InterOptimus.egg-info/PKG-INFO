@@ -4,11 +4,11 @@ Version: 1.0.0
 Summary: High througput simulation making crystalline interfaces
 Home-page: https://github.com/HouGroup/InterOptimus/
 Author: Yaoshu Xie
-Author-email: jasonxie.sz.tsinghua.edu.cn
+Author-email: jasonxie@sz.tsinghua.edu.cn
 Classifier: Programming Language :: Python :: 3
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Operating System :: OS Independent
-Requires-Python: >=3.11
+Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: pymatgen
@@ -19,3 +19,6 @@ Requires-Dist: matplotlib
 Requires-Dist: atomate
 Requires-Dist: fireworks
 Requires-Dist: adjustText
+Requires-Dist: ipywidgets
+Requires-Dist: tqdm
+Requires-Dist: ys_mlipdk

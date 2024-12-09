@@ -4,7 +4,7 @@ setup(
     name="InterOptimus",
     version="1.0.0",
     author="Yaoshu Xie",
-    author_email="jasonxie.sz.tsinghua.edu.cn",
+    author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High througput simulation making crystalline interfaces",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -15,7 +15,7 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.11",
+    python_requires=">=3.12",
     install_requires=[
         "pymatgen",
         "interfacemaster",
@@ -27,6 +27,7 @@ setup(
         "adjustText",
         "ipywidgets",
         "tqdm",
+        "ys_mlipdk",
         
     ]
 )

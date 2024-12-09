@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="InterOptimus",
-    version="0.0.0",
+    version="0.0.1",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High througput simulation making crystalline interfaces",
@@ -15,7 +15,7 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.12",
+    python_requires=">=3.10",
     install_requires=[
         "pymatgen",
         "interfacemaster",

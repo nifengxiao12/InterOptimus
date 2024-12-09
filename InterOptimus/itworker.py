@@ -1,5 +1,4 @@
 from InterOptimus.matching import interface_searching, EquiMatchSorter
-from InterOptimus.optimize import WorkPatcher, InputDataGenerator, interface_score_ranker
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
@@ -9,151 +8,15 @@ from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBu
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat
+from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
-from pymatgen.io.vasp.inputs import Potcar
-from pymatgen.io.vasp.sets import MPStaticSet, MPRelaxSet
+from InterOptimus.VaspWorkFlow import ItFireworkPatcher
 import os
 import pandas as pd
 from mlipdockers.core import MlipCalc
-
-def get_env_variable(var_name):
-    try:
-        value = os.environ[var_name]
-        return value
-    except KeyError:
-        raise EnvironmentError(f"Environment variable '{var_name}' is not set.")
-
-def update_setting_dict(old_dict, new_dict):
-    """
-    update old dict by new dict
-
-    Args:
-    old_dict (dict)
-    new_dict (dict)
-    """
-    if new_dict != None:
-        for i in new_dict.keys():
-            old_dict[i] = new_dict[i]
-    return old_dict
-
-def get_potcar(structure, functional):
-    """
-    get the pymatgen Potcar instance for a structure
-
-    Args:
-    structure (Structure)
-    functional (str): functional set to use
-    
-    Return:
-    (Potcar)
-    """
-    return Potcar([get_potcar_dict()[i.symbol] for i in structure.elements], functional)
-
-def get_potcar_dict():
-    """
-    default potcar label for each element (used recommended ones by the vasp mannual for the PBE.54 functionals)
-
-    Return:
-    (dict): {element: potcar label}
-    """
-    return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu_pv', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu', 'F': 'F', 'Fe': 'Fe_pv', 'Ga': 'Ga_d', 'Gd': 'Gd', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn_pv', 'Mo': 'Mo_pv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_pv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os_pv', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re_pv', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
-
-def get_default_incar_settings(name, **kwargs):
-    """
-    get default incar settings
-
-    Args:
-    name (str): what to calculate
-    """
-    if name == 'standard relax':
-        return {
-        "ALGO": "Normal",
-        "LDAU": False,
-        "EDIFF": 1e-5,
-        "ISIF": 3,
-        "NELM": 1000,
-        "NSW": 400,
-        "PREC": None,
-        "EDIFFG": -0.02,
-        "ISPIN": 2,
-        "ISMEAR": 0,
-        "SIGMA": 0.05,
-        }
-    elif name == 'standard static':
-        return {
-        "LDAU": False,
-        "EDIFF": 1e-5,
-        "NELM": 1000,
-        "PREC": None,
-        "ISPIN": 2,
-        "ALGO": "Normal",
-        "ISMEAR": 0,
-        "SIGMA": 0.05,
-        "LWAVE": True,
-        "LREAL": "Auto"}
-    elif name == 'interface static':
-        incar_settings = get_default_incar_settings('standard static')
-        if kwargs['LDIPOL']:
-            incar_settings['LDIPOL'] = True
-            incar_settings['IDIPOL'] = 3
-        return incar_settings
-    elif name == 'interface relax':
-        incar_settings = get_default_incar_settings('standard relax')
-        if kwargs['LDIPOL']:
-            incar_settings['LDIPOL'] = True
-            incar_settings['IDIPOL'] = 3
-        if kwargs['c_periodic']:
-            incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
-        else:
-            incar_settings['ISIF'] = 2
-        return incar_settings
-    else:
-        raise ValueError("default inter settings only support 'standard relax', 'standard static', 'interface static' and 'interface relax'")
-        
-def get_vasp_input_settings(name, structure, update_incar_settings = None, update_potcar_functional = None,
-                            update_potcar_settings = None, update_kpoints_settings = None, **kwargs):
-    
-    """
-    get user vasp input settings
-    
-    Args:
-    name (str): one of 'standard relax', 'standard static', 'interface static', 'interface relax'
-    structure (Structure): structure for calculation
-    ##ENCUT_scale (float): scaling factor of the maximum en_cut in potcars
-    update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
-    update_potcar_functional (str): which set of functional to use
-    
-    Return:
-    (VaspInputSet)
-    """
-    default_incar_settings = get_default_incar_settings(name, **kwargs)
-    default_potcar_settings = get_potcar_dict()
-    default_kpoints_settings = {'reciprocal_density': 200}
-    user_incar_settings = update_setting_dict(default_incar_settings, update_incar_settings)
-    user_potcar_settings = update_setting_dict(default_potcar_settings, update_potcar_settings)
-    user_kpoints_settings = update_setting_dict(default_kpoints_settings, update_kpoints_settings)
-
-    if update_potcar_functional != None:
-        user_potcar_functional = 'PBE_54'
-    else:
-        user_potcar_functional = update_potcar_functional
-    """
-    potcar = get_potcar(structure, user_potcar_functional)
-    max_encut = max(p.keywords['ENMAX'] for p in potcar)
-    custom_encut = max_encut * ENCUT_scale
-    user_incar_settings['ENCUT'] = custom_encut
-    """
-    if name == 'standard relax' or name == 'interface relax':
-        return MPRelaxSet(structure, user_incar_settings = user_incar_settings, \
-                                       user_potcar_functional=user_potcar_functional, \
-                                       user_potcar_settings = user_potcar_settings, \
-                                       user_kpoints_settings = user_kpoints_settings)
-    else:
-        return MPStaticSet(structure, user_incar_settings = user_incar_settings, \
-                                       user_potcar_functional=user_potcar_functional, \
-                                       user_potcar_settings = user_potcar_settings, \
-                                       user_kpoints_settings = user_kpoints_settings)
+from fireworks import Workflow
+import json
 
 def registration_minimizer(interfaceworker, n_calls, z_range):
     """
@@ -312,7 +175,7 @@ class InterfaceWorker:
         close energy calculator docker container
         """
         self.mc.close()
-        
+    
     def sample_xyz_energy(self, params):
         """
         sample the predicted energy for a specified xyz registration of a initial interface
@@ -331,7 +194,8 @@ class InterfaceWorker:
             initial_interface = self.get_specified_interface(self.match_id_now, self.term_id_now, [0,0,2])
             xyz[2] = (xyz[2] - 2)/initial_interface.lattice.c
             interface_here = apply_cnid_rbt(initial_interface, xyz[0],xyz[1],xyz[2])
-        for i in self.it_atom_ids:
+        term_atom_ids = self.get_interface_atom_indices(interface_here)
+        for i in term_atom_ids:
             if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
                 return 0
         self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
@@ -418,7 +282,7 @@ class InterfaceWorker:
         return (supcl_E - (film_double_E + substrate_double_E) / 2) / area * 16.02176634, \
                (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634, single_pair, double_pair
     
-    def get_interface_atom_indices(self, match_id, term_id):
+    def get_interface_atom_indices(self, interface):
         """
         get the indices of interface atoms
         
@@ -429,7 +293,7 @@ class InterfaceWorker:
         Return:
         indices (array)
         """
-        interface = self.get_specified_interface(match_id, term_id)
+        #interface atom indices
         ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max = get_it_core_indices(interface)
         if self.c_periodic:
             return concatenate((ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max))
@@ -457,9 +321,6 @@ class InterfaceWorker:
         #set match&term id
         self.match_id_now = match_id
         self.term_id_now = term_id
-        
-        #interface atom indices
-        self.it_atom_ids = self.get_interface_atom_indices(match_id, term_id)
         
         #optimize
         result = registration_minimizer(self, n_calls, z_range)
@@ -492,8 +353,6 @@ class InterfaceWorker:
         interface energy by machine learning potential, getting ranked interface energies
 
         Args:
-        match_id (int): unique match id
-        term_id (int): unique term id
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
         calc (str): MLIP calculator: mace, orb-models, sevenn, chgnet, grace-2l
@@ -554,9 +413,148 @@ class InterfaceWorker:
         #close docker container
         self.close_energy_calculator()
 
-    def random_sampling_specified_interface(self, z_range, discut):
+    def random_sampling_specified_interface(self, match_id, term_id, n_taget, n_max, sampling_min_displace, discut):
         """
         perform random sampling of rigid body translation for a specified interface
+        
+        Args:
+        match_id (int): unique match id
+        term_id (int): unique term id
+        n_taget (int): target number of sampling
+        n_max (int): max number of trials
+        sampling_min_displace (float): sampled rigid body translation position are not allowed to be closer than this (angstrom)
+        discut (float): the atoms are not allowed to be closer than this (angstrom)
+        
+        Return:
+        sampled_interfaces (list): list of sampled interfaces (json)
+        xyzs (list): list of sampled xyz parameters
+        rbt_carts: list of sampled RBT positions in cartesian coordinates
         """
+        #get initial interface
+        interface = self.get_specified_interface(match_id, term_id)
+        #calculate cnid catesian
+        CNID = calculate_cnid_in_supercell(interface)[0]
+        CNID_cart = dot(interface.lattice.matrix.T, CNID)
+        #sampling
+        num_of_sampled = 1
+        n_trials = 0
+        rbt_carts = [[0,0,2]]
+        xyzs = [[0,0,2]]
+        ##interface atom indices
+        sampled_interfaces = []
+        sampled_interfaces.append(self.get_specified_interface(match_id, term_id, [0,0,2]).to_json())
+        while num_of_sampled < n_taget and num_of_sampled < n_max:
+            #sampling from (0,0,0) to (1,1,1)
+            x,y,z = [random.random() for i in range(3)]
+            #z is cartesian
+            z = z * 3
+            #calculate cartesian RBT
+            cart_here = x*CNID_cart[:,0] + y*CNID_cart[:,1] + [0,0,z]
+            #calculate distances between this RBT position and already sampled RBT positions
+            distwithbefore = norm(repeat([cart_here], num_of_sampled, axis = 0) - rbt_carts, axis = 1)
+            #RBT position distance not too close
+            if min(distwithbefore) > sampling_min_displace:
+                #min atomic distance not too close
+                interface_here = self.get_specified_interface(match_id, term_id, [x, y, z])
+                existing_too_close_sites = False
+                ##interface atomic indices
+                it_atom_ids = self.get_interface_atom_indices(interface_here)
+                for i in it_atom_ids:
+                    if get_min_nb_distance(i, interface_here, discut) < discut:
+                        existing_too_close_sites = True
+                        break
+                if not existing_too_close_sites:
+                    #interface_here.to_file(f'op_its/{num_of_sampled}_POSCAR')
+                    sampled_interfaces.append(interface_here.to_json())
+                    rbt_carts.append(list(cart_here))
+                    xyzs.append([x,y,z])
+                    num_of_sampled += 1
+            n_trials += 1
         
+        return sampled_interfaces, xyzs, rbt_carts
         
+    def global_random_sampling(self, n_taget, n_max, sampling_min_displace, discut, to_fireworks = False, **kwargs):
+        """
+        perform random sampling of rigid body translation for all the interface
+        
+        Args:
+        n_taget (int): target number of sampling
+        n_max (int): max number of trials
+        sampling_min_displace (float): sampled rigid body translation position are not allowed to be closer than this (angstrom)
+        discut (float): the atoms are not allowed to be closer than this (angstrom)
+        to_fireworks (bool): whether to generate firework workflow dict
+        
+        kwargs:
+        project_name (str): project name to be stored in mongodb database
+        db_file (str): path to atomate mongodb config file
+        vasp_cmd (str): command to run vasp
+        work_dir (str): working directory
+        update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
+        update_potcar_functional (str): which set of functional to use
+
+        Return:
+        (Workflow)
+        """
+        self.global_random_sample_dict = {}
+        with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
+            for i in range(len(self.unique_matches)):
+                with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
+                    for j in range(len(self.all_unique_terminations[i])):
+                        key = f'{i}_{j}'
+                        self.global_random_sample_dict[key] = {}
+                        
+                        self.global_random_sample_dict[key]['sampled_interfaces'], \
+                        self.global_random_sample_dict[key]['xyzs'], \
+                        self.global_random_sample_dict[key]['rbt_carts'] \
+                        = self.random_sampling_specified_interface(i, j, n_taget, n_max, \
+                                                                    sampling_min_displace, discut)
+                        
+                        term_pbar.update(1)
+                match_pbar.update(1)
+                
+        if to_fireworks:
+            with open('global_random_sampling.json','w') as f:
+                json.dump(self.global_random_sample_dict, f)
+            for st in ['user_incar_settings', 'user_potcar_settings', 'user_kpoints_settings', 'user_potcar_functional']:
+                if st not in kwargs.keys():
+                    kwargs[st] = None
+            it_firework_patcher = ItFireworkPatcher(kwargs['project_name'], kwargs['db_file'], kwargs['vasp_cmd'],
+                                                     user_incar_settings = kwargs['user_incar_settings'],
+                                                     user_potcar_settings = kwargs['user_potcar_settings'],
+                                                     user_kpoints_settings = kwargs['user_kpoints_settings'],
+                                                     user_potcar_functional = kwargs['user_potcar_functional'])
+            wf = []
+            with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
+                for i in range(len(self.unique_matches)):
+                    with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
+                        for j in range(len(self.all_unique_terminations[i])):
+                            #slab fws
+                            single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
+                            fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
+                                                                                                {'i':i, 'j':j, 'tp':'fmsg'},
+                                                                                                os.path.join(kwargs['work_dir'], f'fmsg_{i}_{j}'))
+                                                                                                
+                            fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
+                                                                                                {'i':i, 'j':j, 'tp':'fmdb'},
+                                                                                                os.path.join(kwargs['work_dir'], f'fmdb_{i}_{j}'))
+                                                                                                
+                            fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
+                                                                                                {'i':i, 'j':j, 'tp':'stsg'},
+                                                                                                os.path.join(kwargs['work_dir'], f'stsg_{i}_{j}'))
+                                                                                                
+                            fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
+                                                                                                {'i':i, 'j':j, 'tp':'stdb'},
+                                                                                                os.path.join(kwargs['work_dir'], f'stdb_{i}_{j}'))
+                            wf += fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
+                            
+                            #interface fws
+                            its = self.global_random_sample_dict[f'{i}_{j}']['sampled_interfaces']
+                            for k in range(len(its)):
+                                fws = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', Structure.from_dict(json.loads(its[k])),
+                                                                                                {'i':i, 'j':j, 'k':k, 'tp':'it'},
+                                                                                                os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'))
+                                wf += fws
+                                
+                            term_pbar.update(1)
+                    match_pbar.update(1)
+        return Workflow(wf)

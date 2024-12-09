@@ -1,0 +1,4 @@
+InterOptimus.egg-info/
+__pycache__/
+*.pyc
+*.xcodeproj

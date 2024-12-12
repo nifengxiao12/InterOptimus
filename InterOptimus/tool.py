@@ -2,6 +2,8 @@ from pymatgen.transformations.standard_transformations import DeformStructureTra
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
 import numpy as np
+from pymatgen.core.structure import Structure
+from pymatgen.core.lattice import Lattice
 from pymatgen.analysis.interfaces.zsl import fast_norm
 from InterOptimus.CNID import triple_dot, calculate_cnid_in_supercell
 from itertools import combinations
@@ -256,3 +258,11 @@ def add_sele_dyn_slab(slab):
     mobility_mtx[sub_bot_indices] = [False, False, False]
     slab.add_site_property('selective_dynamics', mobility_mtx)
     return slab
+
+def cut_vaccum(structure, c):
+    lps = structure.lattice.parameters
+    carts = [i.coords for i in structure]
+    max_z = max(np.array(carts)[:,2])
+    lps = list(lps)
+    lps[2] = c + max_z
+    return Structure(Lattice.from_parameters(*lps), structure.species, [i.coords for i in structure], coords_are_cartesian = True)

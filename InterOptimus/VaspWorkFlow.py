@@ -61,33 +61,31 @@ def get_default_incar_settings(name, **kwargs):
     """
     if name == 'standard relax':
         return {
+        "EDIFF": 1e-4,
         "ALGO": "Normal",
-        "LDAU": False,
-        "EDIFF": 1e-5,
         "ISIF": 3,
-        "NELM": 1000,
-        "NSW": 500,
-        "PREC": None,
-        "EDIFFG": -0.02,
-        "ISPIN": 2,
-        "ISMEAR": 0,
-        "SIGMA": 0.05,
+        "NELM": 250,
+        "NSW": 300,
         "LWAVE": False,
         "NCORE": 12,
+        "ISMEAR": 0,
+        "SIGMA": 0.05,
+        "LREAL":"Auto",
+        "ADDGRID": True,
+        "LDAU": False,
         }
     elif name == 'standard static':
         return {
-        "LDAU": False,
         "EDIFF": 1e-5,
-        "NELM": 1000,
-        "PREC": None,
-        "ISPIN": 2,
         "ALGO": "Normal",
+        "NELM": 250,
+        "LWAVE": True,
+        "NCORE": 12,
         "ISMEAR": 0,
         "SIGMA": 0.05,
-        "LWAVE": True,
-        "LREAL": "Auto",
-        "NCORE": 12,
+        "LREAL":"Auto",
+        "ADDGRID": True,
+        "LDAU": False,
         }
     elif name == 'interface static':
         incar_settings = get_default_incar_settings('standard static')
@@ -126,13 +124,14 @@ def get_vasp_input_settings(name, structure, update_incar_settings = None, updat
     (VaspInputSet)
     """
     default_incar_settings = get_default_incar_settings(name, **kwargs)
-    default_potcar_settings = get_potcar_dict()
+    #default_potcar_settings = get_potcar_dict()
+    default_potcar_settings = {}
     default_kpoints_settings = {'reciprocal_density':100}
     user_incar_settings = update_setting_dict(default_incar_settings, update_incar_settings)
     user_potcar_settings = update_setting_dict(default_potcar_settings, update_potcar_settings)
     user_kpoints_settings = update_setting_dict(default_kpoints_settings, update_kpoints_settings)
 
-    if update_potcar_functional != None:
+    if update_potcar_functional == None:
         user_potcar_functional = 'PBE_54'
     else:
         user_potcar_functional = update_potcar_functional
@@ -216,16 +215,18 @@ class ItFireworkPatcher:
         fw1 = Firework(
                        tasks=[WriteVaspFromIOSet(vasp_input_set = self.vasp_input_settings('interface static', structure, LDIPOL = False),
                                                  structure = structure),
-                              RunVaspCustodian(vasp_cmd = self.vasp_cmd, handler_group = "no_handler", gzip_output = False),
+                              RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
                               VaspToDb(db_file = self.db_file, additional_fields = additional_fields)],
                         name = fw_name + "_ndp",
                         spec={"_launch_dir": launch_dir}
                        )
         #dipole correction
         additional_fields['dp'] = 't'
+        mod_incar_update = get_default_incar_settings(name, LDIPOL = True)
+        mod_incar_update['LWAVE'] = False
         fw2 = Firework(
-                       tasks=[ModifyIncar(incar_update = get_default_incar_settings(name, LDIPOL = True)),
-                              RunVaspCustodian(vasp_cmd = self.vasp_cmd, handler_group = "no_handler", gzip_output = False),
+                       tasks=[ModifyIncar(incar_update = mod_incar_update),
+                              RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
                               VaspToDb(db_file = self.db_file, additional_fields = additional_fields),
                               ScriptTask.from_str('rm WAVECAR')],
                         name = fw_name + "_dp",
@@ -250,7 +251,7 @@ class ItFireworkPatcher:
                                                   vasp_input_set = self.vasp_input_settings(name, structure, **kwargs),
                                                   structure = structure
                                                   ),
-                                RunVaspCustodian(vasp_cmd = self.vasp_cmd, handler_group = "no_handler", gzip_output = False),
+                                RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
                                 VaspToDb(db_file = self.db_file, additional_fields = additional_fields)
                                ],
                                name = f'{self.project_name}_NDP',

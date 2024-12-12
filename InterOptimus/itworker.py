@@ -3,7 +3,7 @@ from pymatgen.transformations.site_transformations import TranslateSitesTransfor
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from InterOptimus.equi_term import get_non_identical_slab_pairs
-from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance
+from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from skopt import gp_minimize
 from skopt.space import Real
@@ -17,6 +17,7 @@ import pandas as pd
 from mlipdockers.core import MlipCalc
 from fireworks import Workflow
 import json
+import pickle
 
 def registration_minimizer(interfaceworker, n_calls, z_range):
     """
@@ -96,6 +97,7 @@ class InterfaceWorker:
         self.termination_ftol, self.c_periodic, self.vacuum_over_film, self.film_thickness, self.substrate_thickness, self.shift_to_bottom = \
         termination_ftol, c_periodic, vacuum_over_film, film_thickness, substrate_thickness, shift_to_bottom
         self.get_all_unique_terminations()
+        self.calculate_thickness()
 
     def get_specified_match_cib(self, id):
         """
@@ -134,6 +136,14 @@ class InterfaceWorker:
             all_unique_terminations.append(self.get_unique_terminations(i))
         self.all_unique_terminations = all_unique_terminations
     
+    def calculate_thickness(self):
+        self.thickness = []
+        for i in range(len(self.unique_matches)):
+            film_l, substrate_l = self.get_film_substrate_layer_thickness(i, 0)
+            film_thickness = int(ceil(self.film_thickness/film_l))
+            substrate_thickness = int(ceil(self.substrate_thickness/substrate_l))
+            self.thickness.append((film_thickness, substrate_thickness))
+    
     def get_specified_interface(self, match_id, term_id, xyz = [0,0,2]):
         """
         get a specified interface by unique match index, unique termination index, and xyz registration
@@ -153,9 +163,10 @@ class InterfaceWorker:
             gap = z
             vacuum_over_film = self.vacuum_over_film
         cib = self.get_specified_match_cib(match_id)
+        film_thickness, substrate_thickness = self.thickness[match_id]
         interface_here = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = self.substrate_thickness, film_thickness = self.film_thickness, \
-                                       vacuum_over_film = vacuum_over_film, gap = gap, in_layers = False))[0]
+                                       substrate_thickness = substrate_thickness, film_thickness = film_thickness, \
+                                       vacuum_over_film = vacuum_over_film, gap = gap, in_layers = True))[0]
         interface_here = apply_cnid_rbt(interface_here, x, y, 0)
         if self.shift_to_bottom:
             interface_here = trans_to_bottom(interface_here)
@@ -200,27 +211,52 @@ class InterfaceWorker:
                 return 0
         self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
         return self.mc.calculate(interface_here)
-        
+    
     def get_film_substrate_layer_thickness(self, match_id, term_id):
         """
         get single layer thickness
         """
         cib = self.get_specified_match_cib(match_id)
-        interface_film_1 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = 2, film_thickness = 2, \
-                                       vacuum_over_film = 0, gap = 0, in_layers = True))[0]
-        interface_film_2 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = 2, film_thickness = 3, \
-                                       vacuum_over_film = 0, gap = 0, in_layers = True))[0]
-
-        interface_substrate_1 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = 2, film_thickness = 2, \
-                                       vacuum_over_film = 0, gap = 0, in_layers = True))[0]
-        interface_substrate_2 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = 3, film_thickness = 2, \
-                                       vacuum_over_film = 0, gap = 0, in_layers = True))[0]
-        return interface_film_2.lattice.c - interface_film_1.lattice.c, interface_substrate_2.lattice.c - interface_substrate_1.lattice.c
+        
+        delta_c = 0
+        last_delta_c = 0
+        initial_n = 2
+        while last_delta_c == 0:
+            last_delta_c = delta_c
+            interface_film_1 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
+                                           substrate_thickness = 2, film_thickness = initial_n, \
+                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
+            interface_film_2 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
+                                           substrate_thickness = 2, film_thickness = initial_n + 5, \
+                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
+            delta_c = interface_film_2.lattice.c - interface_film_1.lattice.c
+        film_delta_c = delta_c/5
+            
+        
+        delta_c = 0
+        last_delta_c = 0
+        initial_n = 2
+        while last_delta_c == 0:
+            last_delta_c = delta_c
+            interface_substrate_1 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
+                                           substrate_thickness = initial_n, film_thickness = 2, \
+                                           vacuum_over_film = 0, gap = 0, in_layers = True))[0]
+            interface_substrate_2 = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
+                                           substrate_thickness = initial_n + 5, film_thickness = 2, \
+                                           vacuum_over_film = 0, gap = 0, in_layers = True))[0]
+            delta_c = interface_substrate_2.lattice.c - interface_substrate_1.lattice.c
+        substrate_delta_c = delta_c/5
+        
+        
+        return film_delta_c, substrate_delta_c
     
+    def output_slabs(self, match_id, term_id):
+        sgs, dbs = self.get_decomposition_slabs(match_id, term_id)
+        sgs[0].to_file('fmsg_POSCAR')
+        sgs[1].to_file('stsg_POSCAR')
+        dbs[0].to_file('fmdb_POSCAR')
+        dbs[1].to_file('stdb_POSCAR')
+
     def get_decomposition_slabs(self, match_id, term_id):
         """
         get decomposed film & substrate slabs to calculate binding energy
@@ -239,24 +275,55 @@ class InterfaceWorker:
         film_layers = int(ceil(self.film_thickness/film_dx))
         substrate_layers = int(ceil(self.substrate_thickness/substrate_dx))
 
-        film_thickness_double = film_layers * 2 * film_dx - 0.1
-        substrate_thickness_double = substrate_layers * 2 * substrate_dx - 0.1
+        #film_thickness_double = film_layers * 2 * film_dx - 0.1
+        #substrate_thickness_double = substrate_layers * 2 * substrate_dx - 0.1
+        
+        film_thickness, substrate_thickness = self.thickness[match_id]
 
         interface_single = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = self.substrate_thickness, film_thickness = self.film_thickness, \
-                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = False))[0]
+                                       substrate_thickness = substrate_thickness, film_thickness = film_thickness, \
+                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
+        
+        n_film_s = len(interface_single.film)
+        n_substrate_s = len(interface_single.substrate)
+        
+        db_substrate_thickness = substrate_thickness * 2
+        db_film_thickness = film_thickness * 2
         
         interface_double = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = substrate_thickness_double, film_thickness = film_thickness_double, \
-                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = False))[0]
+                                       substrate_thickness = db_substrate_thickness * 2, film_thickness = db_film_thickness * 2, \
+                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
+                                       
+        n_film_d = len(interface_double.film)
+        n_substrate_d = len(interface_double.substrate)
         
+        while not (n_film_d == 2 * n_film_s and n_substrate_d == 2 * n_substrate_s):
+            if n_substrate_d > 2 * n_substrate_s:
+                db_substrate_thickness += -1
+            if n_substrate_d < 2 * n_substrate_s:
+                db_substrate_thickness += 1
+            if n_film_d > 2 * n_film_s:
+                db_film_thickness += -1
+            if n_film_d < 2 * n_film_s:
+                db_film_thickness += 1
+            
+            interface_double = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
+                                       substrate_thickness = db_substrate_thickness * 2, film_thickness = db_film_thickness * 2, \
+                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
+            n_film_d = len(interface_double.film)
+            n_substrate_d = len(interface_double.substrate)
+        
+        """
         dx = interface_double.lattice.c - interface_single.lattice.c
         interface_double = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
                                        substrate_thickness = substrate_thickness_double, film_thickness = film_thickness_double, \
                                        vacuum_over_film = self.vacuum_over_film - dx/2, gap = 2, in_layers = False))[0]
+        """
         
-        return (trans_to_bottom(interface_single.film), trans_to_bottom(interface_single.substrate)), \
-                (trans_to_bottom(interface_double.film), trans_to_bottom(interface_double.substrate))
+        return (cut_vaccum(trans_to_bottom(interface_single.film), self.vacuum_over_film), \
+                cut_vaccum(trans_to_bottom(interface_single.substrate), self.vacuum_over_film)), \
+                (cut_vaccum(trans_to_bottom(interface_double.film), self.vacuum_over_film), \
+                cut_vaccum(trans_to_bottom(interface_double.substrate), self.vacuum_over_film))
     
     def get_interface_energy_and_binding_energy(self, supcl_E, match_id, term_id, area):
         """
@@ -280,7 +347,9 @@ class InterfaceWorker:
         film_adhe_E = - film_double_E + 2 * film_single_E
         substrate_adhe_E = - substrate_double_E + 2 * substrate_single_E
         return (supcl_E - (film_double_E + substrate_double_E) / 2) / area * 16.02176634, \
-               (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634, single_pair, double_pair
+               (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634, \
+               single_pair, double_pair, \
+               (film_single_E, substrate_single_E), (film_double_E, substrate_double_E)
     
     def get_interface_atom_indices(self, interface):
         """
@@ -347,6 +416,7 @@ class InterfaceWorker:
         self.opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
         self.opt_results[(match_id,term_id)]['supcl_E'] = ys
     
+
     def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'mace', discut = 0.8):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
@@ -358,6 +428,8 @@ class InterfaceWorker:
         calc (str): MLIP calculator: mace, orb-models, sevenn, chgnet, grace-2l
         discut: (float): allowed minimum atomic distance for searching
         """
+
+        self.opt_results = {}
         self.discut = discut
         columns = [r'$h_s$',r'$k_s$',r'$l_s$',
                   r'$h_f$',r'$k_f$',r'$l_f$',
@@ -382,25 +454,40 @@ class InterfaceWorker:
                         idt = self.unique_matches_indices_data
                         
                         hkl_f, hkl_s = m[i].film_miller, m[i].substrate_miller
-                        A, epsilon, E_sup = m[i].match_area, m[i].von_mises_strain, self.opt_results[(i,j)]['supcl_E'][0]
+                        A, epsilon, E_sups = m[i].match_area, m[i].von_mises_strain, self.opt_results[(i,j)]['supcl_E']
                         uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                         uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                         
                         ##calculate adhesive & interface energy
-                        it_E, bd_E, single_pair, double_pair = self.get_interface_energy_and_binding_energy(E_sup, i, j, A)
+                        it_Es, bd_Es, single_pair, double_pair, single_pair_E, double_pair_E = self.get_interface_energy_and_binding_energy(array(E_sups), i, j, A)
                         
+                        self.opt_results[(i,j)]['A'] = A
+                        self.opt_results[(i,j)]['strain'] = epsilon
+                        self.opt_results[(i,j)]['it_Es'] = it_Es
+                        self.opt_results[(i,j)]['bd_Es'] = bd_Es
+                        self.opt_results[(i,j)]['sup_Es'] = E_sups
                         ##save single double slabs
-                        self.opt_results[(i,j)]['single_slabs'] = {}
-                        self.opt_results[(i,j)]['single_slabs']['film'] = single_pair[0]
-                        self.opt_results[(i,j)]['single_slabs']['substrate'] = single_pair[1]
+                        self.opt_results[(i,j)]['slabs'] = {}
+                        self.opt_results[(i,j)]['slabs']['fmsg'] = {}
+                        self.opt_results[(i,j)]['slabs']['fmsg']['structure'] = single_pair[0]
+                        self.opt_results[(i,j)]['slabs']['fmsg']['e'] = single_pair_E[0]
                         
-                        self.opt_results[(i,j)]['double_slabs'] = {}
-                        self.opt_results[(i,j)]['double_slabs']['film'] = double_pair[0]
-                        self.opt_results[(i,j)]['double_slabs']['substrate'] = double_pair[1]
+                        self.opt_results[(i,j)]['slabs']['stsg'] = {}
+                        self.opt_results[(i,j)]['slabs']['stsg']['structure'] = single_pair[1]
+                        self.opt_results[(i,j)]['slabs']['stsg']['e'] = single_pair_E[1]
+                        
+                        self.opt_results[(i,j)]['slabs']['fmdb'] = {}
+                        self.opt_results[(i,j)]['slabs']['fmdb']['structure'] = double_pair[0]
+                        self.opt_results[(i,j)]['slabs']['fmdb']['e'] = double_pair_E[0]
+                        
+                        self.opt_results[(i,j)]['slabs']['stdb'] = {}
+                        self.opt_results[(i,j)]['slabs']['stdb']['structure'] = double_pair[1]
+                        self.opt_results[(i,j)]['slabs']['stdb']['e'] = double_pair_E[1]
+                        
                         formated_data.append(
                                     [hkl_f[0], hkl_f[1], hkl_f[2],\
                                     hkl_s[0], hkl_s[1], hkl_s[2], \
-                                    A, epsilon, it_E, bd_E, E_sup, \
+                                    A, epsilon, it_Es[0], bd_Es[0], E_sups[0], \
                                     uvw_f1[0], uvw_f1[1], uvw_f1[2], \
                                     uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                     uvw_s1[0], uvw_s1[1], uvw_s1[2], \
@@ -412,8 +499,66 @@ class InterfaceWorker:
         
         #close docker container
         self.close_energy_calculator()
-
-    def random_sampling_specified_interface(self, match_id, term_id, n_taget, n_max, sampling_min_displace, discut):
+    
+    def mlip_benchmark(self, mlips, n_calls = 50, z_range = (0.5, 3), discut = 0.8, **kwargs):
+        """
+        glabal minimization by different mlips, generate firework
+        
+        Args:
+        mlips (list): mlips
+        n_calls (int): number of calls
+        z_range (tuple): sampling range of z
+        discut: (float): allowed minimum atomic distance for searching
+        
+        kwargs:
+        project_name (str): project name to be stored in mongodb database
+        db_file (str): path to atomate mongodb config file
+        vasp_cmd (str): command to run vasp
+        work_dir (str): working directory
+        update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
+        update_potcar_functional (str): which set of functional to use
+        
+        Return:
+        (Workflow)
+        """
+        for st in ['user_incar_settings', 'user_potcar_settings', 'user_kpoints_settings', 'user_potcar_functional']:
+            if st not in kwargs.keys():
+                kwargs[st] = None
+        it_firework_patcher = ItFireworkPatcher(kwargs['project_name'], kwargs['db_file'], kwargs['vasp_cmd'],
+                                                 user_incar_settings = kwargs['user_incar_settings'],
+                                                 user_potcar_settings = kwargs['user_potcar_settings'],
+                                                 user_kpoints_settings = kwargs['user_kpoints_settings'],
+                                                 user_potcar_functional = kwargs['user_potcar_functional'])
+        wf = []
+        for mlip in mlips:
+            self.global_minimization(n_calls = n_calls, z_range = z_range, calc = mlip, discut = discut)
+            self.benchmk_dict = {}
+            self.benchmk_dict[mlip] = {}
+            for i in range(len(self.unique_matches)):
+                for j in range(len(self.all_unique_terminations[i])):
+                    self.benchmk_dict[mlip][(i,j)] = {}
+                    self.benchmk_dict[mlip][(i,j)]['A'] = self.unique_matches[i].match_area
+                    self.benchmk_dict[mlip][(i,j)]['strain'] = self.unique_matches[i].von_mises_strain
+                    self.benchmk_dict[mlip][(i,j)]['slabs'] = self.opt_results[(i,j)]['slabs']
+                    self.benchmk_dict[mlip][(i,j)]['best_it'] = {}
+                    self.benchmk_dict[mlip][(i,j)]['best_it']['structure'] = self.opt_results[(i,j)]['sampled_interfaces'][0]
+                    self.benchmk_dict[mlip][(i,j)]['best_it']['sup_E'] = self.opt_results[(i,j)]['sup_Es'][0]
+                    self.benchmk_dict[mlip][(i,j)]['best_it']['it_E'] = self.opt_results[(i,j)]['it_Es'][0]
+                    self.benchmk_dict[mlip][(i,j)]['best_it']['bd_E'] = self.opt_results[(i,j)]['bd_Es'][0]
+                    self.benchmk_dict[mlip][(i,j)]['opt_results'] = self.opt_results[(i,j)]
+                    
+                    single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
+                    work_dir = os.path.join(kwargs['work_dir'], mlip)
+                    wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir)
+                    wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static',
+                                                                            self.benchmk_dict[mlip][(i,j)]['best_it']['structure'],
+                                                                            {'i':i, 'j':j, 'tp':'it'},
+                                                                            os.path.join(work_dir, f'it_{i}_{j}'))
+        with open('benchmk.pkl','wb') as f:
+            pickle.dump(self.benchmk_dict, f)
+        return Workflow(wf)
+                    
+    def random_sampling_specified_interface(self, match_id, term_id, n_taget, n_max, sampling_min_displace, discut, set_seed = True, seed = 999):
         """
         perform random sampling of rigid body translation for a specified interface
         
@@ -424,6 +569,8 @@ class InterfaceWorker:
         n_max (int): max number of trials
         sampling_min_displace (float): sampled rigid body translation position are not allowed to be closer than this (angstrom)
         discut (float): the atoms are not allowed to be closer than this (angstrom)
+        set_seed (bool): whether to set random seed
+        seed (int): random seed
         
         Return:
         sampled_interfaces (list): list of sampled interfaces (json)
@@ -443,9 +590,12 @@ class InterfaceWorker:
         ##interface atom indices
         sampled_interfaces = []
         sampled_interfaces.append(self.get_specified_interface(match_id, term_id, [0,0,2]).to_json())
-        while num_of_sampled < n_taget and num_of_sampled < n_max:
+        if set_seed == True:
+            random.seed(seed)
+        one_short_random = random.rand(n_max, 3)
+        while num_of_sampled < n_taget and n_trials < n_max:
             #sampling from (0,0,0) to (1,1,1)
-            x,y,z = [random.random() for i in range(3)]
+            x,y,z = one_short_random[n_trials]
             #z is cartesian
             z = z * 3
             #calculate cartesian RBT
@@ -472,8 +622,49 @@ class InterfaceWorker:
             n_trials += 1
         
         return sampled_interfaces, xyzs, rbt_carts
+    
+    def calculate_itE_bdE(self, fmsg_E, fmdb_E, stsg_E, stdb_E, sup_E, A):
+        it_E = (sup_E - 1/2 * (fmdb_E + stdb_E)) / A * 16.02176634
+        bd_E = (sup_E - (fmsg_E + stsg_E)) / A * 16.02176634
+        return it_E, bd_E
+    
+    def predict_global_random_sampling(self, mlip):
+        """
+        predict all the sampled structures
         
-    def global_random_sampling(self, n_taget, n_max, sampling_min_displace, discut, to_fireworks = False, **kwargs):
+        Args:
+        mlip (str): which machine learning potential to use
+        """
+        keys = list(self.global_random_sample_dict.keys())
+        self.set_energy_calculator_docker(mlip)
+        for i in keys:
+            if 'predict' not in self.global_random_sample_dict[i].keys():
+                self.global_random_sample_dict[i]['predict'] = {}
+            self.global_random_sample_dict[i]['predict'][mlip] = {}
+            
+            #slabs
+            for slb in ['fmsg','fmdb','stsg','stdb']:
+                stct = Structure.from_dict(json.loads(self.global_random_sample_dict[i][slb]))
+                self.global_random_sample_dict[i]['predict'][mlip][slb] = self.mc.calculate(stct)
+                
+            dct = self.global_random_sample_dict[i]['predict'][mlip]
+            
+            self.global_random_sample_dict[i]['predict'][mlip]['sup_Es'] = []
+            self.global_random_sample_dict[i]['predict'][mlip]['it_Es'] = []
+            self.global_random_sample_dict[i]['predict'][mlip]['bd_Es'] = []
+            
+            for k in self.global_random_sample_dict[i]['sampled_interfaces']:
+                sup_E = self.mc.calculate(Structure.from_dict(json.loads(k)))
+                self.global_random_sample_dict[i]['predict'][mlip]['sup_Es'].append(sup_E)
+                
+                it_E, bd_E = self.calculate_itE_bdE(dct['fmsg'], dct['fmdb'], dct['stsg'], dct['stdb'], sup_E, self.global_random_sample_dict[i]['A'])
+                
+                self.global_random_sample_dict[i]['predict'][mlip]['it_Es'].append(it_E)
+                self.global_random_sample_dict[i]['predict'][mlip]['bd_Es'].append(bd_E)
+                
+        self.close_energy_calculator()
+        
+    def global_random_sampling(self, n_taget, n_max, sampling_min_displace, discut, set_seed = True, seed = 999, to_fireworks = False, **kwargs):
         """
         perform random sampling of rigid body translation for all the interface
         
@@ -482,6 +673,8 @@ class InterfaceWorker:
         n_max (int): max number of trials
         sampling_min_displace (float): sampled rigid body translation position are not allowed to be closer than this (angstrom)
         discut (float): the atoms are not allowed to be closer than this (angstrom)
+        set_seed (bool): whether to set random seed
+        seed (int): random seed
         to_fireworks (bool): whether to generate firework workflow dict
         
         kwargs:
@@ -495,26 +688,7 @@ class InterfaceWorker:
         Return:
         (Workflow)
         """
-        self.global_random_sample_dict = {}
-        with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
-            for i in range(len(self.unique_matches)):
-                with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    for j in range(len(self.all_unique_terminations[i])):
-                        key = f'{i}_{j}'
-                        self.global_random_sample_dict[key] = {}
-                        
-                        self.global_random_sample_dict[key]['sampled_interfaces'], \
-                        self.global_random_sample_dict[key]['xyzs'], \
-                        self.global_random_sample_dict[key]['rbt_carts'] \
-                        = self.random_sampling_specified_interface(i, j, n_taget, n_max, \
-                                                                    sampling_min_displace, discut)
-                        
-                        term_pbar.update(1)
-                match_pbar.update(1)
-                
         if to_fireworks:
-            with open('global_random_sampling.json','w') as f:
-                json.dump(self.global_random_sample_dict, f)
             for st in ['user_incar_settings', 'user_potcar_settings', 'user_kpoints_settings', 'user_potcar_functional']:
                 if st not in kwargs.keys():
                     kwargs[st] = None
@@ -524,37 +698,64 @@ class InterfaceWorker:
                                                      user_kpoints_settings = kwargs['user_kpoints_settings'],
                                                      user_potcar_functional = kwargs['user_potcar_functional'])
             wf = []
-            with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
-                for i in range(len(self.unique_matches)):
-                    with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                        for j in range(len(self.all_unique_terminations[i])):
-                            #slab fws
-                            single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
-                            fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
-                                                                                                {'i':i, 'j':j, 'tp':'fmsg'},
-                                                                                                os.path.join(kwargs['work_dir'], f'fmsg_{i}_{j}'))
-                                                                                                
-                            fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
-                                                                                                {'i':i, 'j':j, 'tp':'fmdb'},
-                                                                                                os.path.join(kwargs['work_dir'], f'fmdb_{i}_{j}'))
-                                                                                                
-                            fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
-                                                                                                {'i':i, 'j':j, 'tp':'stsg'},
-                                                                                                os.path.join(kwargs['work_dir'], f'stsg_{i}_{j}'))
-                                                                                                
-                            fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
-                                                                                                {'i':i, 'j':j, 'tp':'stdb'},
-                                                                                                os.path.join(kwargs['work_dir'], f'stdb_{i}_{j}'))
-                            wf += fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
+
+        self.global_random_sample_dict = {}
+        with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
+            for i in range(len(self.unique_matches)):
+                with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
+                    for j in range(len(self.all_unique_terminations[i])):
+                        key = f'{i}_{j}'
+                        self.global_random_sample_dict[key] = {}
+                        self.global_random_sample_dict[key]['A'] = self.unique_matches[i].match_area
+                        self.global_random_sample_dict[key]['strain'] = self.unique_matches[i].von_mises_strain
+                        
+                        self.global_random_sample_dict[key]['sampled_interfaces'], \
+                        self.global_random_sample_dict[key]['xyzs'], \
+                        self.global_random_sample_dict[key]['rbt_carts'] \
+                        = self.random_sampling_specified_interface(i, j, n_taget, n_max, \
+                                                                    sampling_min_displace, discut, set_seed, seed)
+                        single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
+
+                        if to_fireworks:
+
+                            wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, kwargs['work_dir'])
                             
-                            #interface fws
+                            #interface workflow
                             its = self.global_random_sample_dict[f'{i}_{j}']['sampled_interfaces']
                             for k in range(len(its)):
                                 fws = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', Structure.from_dict(json.loads(its[k])),
-                                                                                                {'i':i, 'j':j, 'k':k, 'tp':'it'},
-                                                                                                os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'))
+                                                                                          {'i':i, 'j':j, 'k':k, 'tp':'it'},
+                                                                                          os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'))
                                 wf += fws
-                                
-                            term_pbar.update(1)
-                    match_pbar.update(1)
-        return Workflow(wf)
+
+                        #save slab info
+                        self.global_random_sample_dict[f'{i}_{j}']['fmsg'], self.global_random_sample_dict[f'{i}_{j}']['fmdb'], \
+                        self.global_random_sample_dict[f'{i}_{j}']['stsg'], self.global_random_sample_dict[f'{i}_{j}']['stdb'], = \
+                        single_pairs[0].to_json(), double_pairs[0].to_json(), single_pairs[1].to_json(), double_pairs[1].to_json()
+                        
+                        term_pbar.update(1)
+                match_pbar.update(1)
+                
+        if to_fireworks:
+            with open('global_random_sampling.json','w') as f:
+                json.dump(self.global_random_sample_dict, f)
+            return Workflow(wf)
+
+def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir):
+    """
+    get fireworks of a set of slabs
+    """
+    #slab workflow
+    fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
+                                                                        {'i':i, 'j':j, 'tp':'fmsg'},
+                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'))
+    fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
+                                                                        {'i':i, 'j':j, 'tp':'fmdb'},
+                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'))
+    fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
+                                                                        {'i':i, 'j':j, 'tp':'stsg'},
+                                                                        os.path.join(workdir, f'stsg_{i}_{j}'))
+    fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
+                                                                        {'i':i, 'j':j, 'tp':'stdb'},
+                                                                        os.path.join(workdir, f'stdb_{i}_{j}'))
+    return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb

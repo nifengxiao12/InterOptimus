@@ -549,10 +549,10 @@ class InterfaceWorker:
                     
                     single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
                     work_dir = os.path.join(kwargs['work_dir'], mlip)
-                    wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir)
+                    wf += get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, mlip)
                     wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static',
                                                                             self.benchmk_dict[mlip][(i,j)]['best_it']['structure'],
-                                                                            {'i':i, 'j':j, 'tp':'it'},
+                                                                            {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'},
                                                                             os.path.join(work_dir, f'it_{i}_{j}'))
         with open('benchmk.pkl','wb') as f:
             pickle.dump(self.benchmk_dict, f)
@@ -740,6 +740,116 @@ class InterfaceWorker:
             with open('global_random_sampling.json','w') as f:
                 json.dump(self.global_random_sample_dict, f)
             return Workflow(wf)
+    
+    def yang_minimization(self, 
+                        match_id, 
+                        n_calls=30, 
+                        z_range=(0.5, 3), 
+                        calc='mace', 
+                        discut=0.8):
+        """
+        根据指定的match_id对对应的终止层进行贝叶斯优化，以最小化界面能量并生成优化结果。
+        流程与global_minimization类似，但不对所有匹配进行，只对给定的match_id执行。
+        
+        Args:
+            match_id (int): 指定要优化的match_id
+            n_calls (int): 优化迭代次数
+            z_range (tuple): z方向优化搜索范围
+            calc (str): 使用的MLIP计算器，如'mace', 'sevenn', 'chgnet', 'grace-2l', 'orb-models'
+            discut (float): 最小原子间距，用于优化时的约束
+        """
+        self.discut = discut  # 设置类属性
+        
+        # 定义列名，与global_minimization中类似
+        columns = [r'$h_s$', r'$k_s$', r'$l_s$',
+                r'$h_f$', r'$k_f$', r'$l_f$',
+                r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', 
+                r'$E_{bd}$ $(J/m^2)$', r'$E_{sp}$',
+                r'$u_{f1}$', r'$v_{f1}$', r'$w_{f1}$',
+                r'$u_{f2}$', r'$v_{f2}$', r'$w_{f2}$',
+                r'$u_{s1}$', r'$v_{s1}$', r'$w_{s1}$',
+                r'$u_{s2}$', r'$v_{s2}$', r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
+        formated_data = []
+
+        # 设置docker计算环境（与global_minimization类似）
+        self.set_energy_calculator_docker(calc)
+
+        # 仅针对指定的match_id进行优化，此处假设match_id在self.unique_matches中有效
+        # 获取指定match_id对应的terminations
+        terminations = self.all_unique_terminations[match_id]
+
+        # 使用tqdm显示进度
+        with tqdm(total=len(terminations), desc=f"Terminations for match_id {match_id}") as term_pbar:
+            for j, term in enumerate(terminations):
+                try:
+                    # 调用优化函数，对指定的match_id和term_id进行优化
+                    self.optimize_specified_interface_by_mlip(match_id, j, n_calls=n_calls, z_range=z_range, calc=calc)
+        
+                    # 提取该match、term对应的数据
+                    m = self.unique_matches
+                    idt = self.unique_matches_indices_data
+
+                    hkl_f, hkl_s = m[match_id].film_miller, m[match_id].substrate_miller
+                    A, epsilon, E_sups = m[match_id].match_area, m[match_id].von_mises_strain, self.opt_results[(match_id,j)]['supcl_E']
+                    uvw_f1, uvw_f2 = idt[match_id]['film_conventional_vectors']
+                    uvw_s1, uvw_s2 = idt[match_id]['substrate_conventional_vectors']
+        
+                    # 计算界面能与粘结能
+                    it_Es, bd_Es, single_pair, double_pair, single_pair_E, double_pair_E = self.get_interface_energy_and_binding_energy(
+                        array(E_sups), match_id, j, A
+                    )
+        
+                    # 存储计算结果
+                    self.opt_results[(match_id,j)]['A'] = A
+                    self.opt_results[(match_id,j)]['strain'] = epsilon
+                    self.opt_results[(match_id,j)]['it_Es'] = it_Es
+                    self.opt_results[(match_id,j)]['bd_Es'] = bd_Es
+                    self.opt_results[(match_id,j)]['sup_Es'] = E_sups
+        
+                    # 保存单层与双层结构的信息
+                    self.opt_results[(match_id,j)]['slabs'] = {}
+                    self.opt_results[(match_id,j)]['slabs']['fmsg'] = {
+                        'structure': single_pair[0],
+                        'e': single_pair_E[0]
+                    }
+                    self.opt_results[(match_id,j)]['slabs']['stsg'] = {
+                        'structure': single_pair[1],
+                        'e': single_pair_E[1]
+                    }
+                    self.opt_results[(match_id,j)]['slabs']['fmdb'] = {
+                        'structure': double_pair[0],
+                        'e': double_pair_E[0]
+                    }
+                    self.opt_results[(match_id,j)]['slabs']['stdb'] = {
+                        'structure': double_pair[1],
+                        'e': double_pair_E[1]
+                    }
+        
+                    # 记录format后的数据
+                    formated_data.append([
+                        hkl_f[0], hkl_f[1], hkl_f[2],
+                        hkl_s[0], hkl_s[1], hkl_s[2],
+                        A, epsilon, it_Es[0], bd_Es[0], E_sups[0],
+                        uvw_f1[0], uvw_f1[1], uvw_f1[2],
+                        uvw_f2[0], uvw_f2[1], uvw_f2[2],
+                        uvw_s1[0], uvw_s1[1], uvw_s1[2],
+                        uvw_s2[0], uvw_s2[1], uvw_s2[2],
+                        term, match_id, j
+                    ])
+        
+                except KeyError:
+                    print(f"警告: opt_results 中不存在键 ({match_id}, {j})。跳过此组合。")
+                except Exception as e:
+                    print(f"错误: 处理 ({match_id}, {j}) 时出错: {e}")
+                finally:
+                    term_pbar.update(1)
+        
+        # 创建DataFrame并排序
+        self.yang_optimized_data = pd.DataFrame(formated_data, columns=columns)
+        self.yang_optimized_data = self.yang_optimized_data.sort_values(by=r'$E_{it}$ $(J/m^2)$')
+        
+        # 关闭docker计算环境
+        self.close_energy_calculator()
 
 def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir):
     """
@@ -757,5 +867,24 @@ def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, wo
                                                                         os.path.join(workdir, f'stsg_{i}_{j}'))
     fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
                                                                         {'i':i, 'j':j, 'tp':'stdb'},
+                                                                        os.path.join(workdir, f'stdb_{i}_{j}'))
+    return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
+
+def get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, mlip):
+    """
+    get fireworks of a set of slabs
+    """
+    #slab workflow
+    fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmsg'},
+                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'))
+    fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmdb'},
+                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'))
+    fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'stsg'},
+                                                                        os.path.join(workdir, f'stsg_{i}_{j}'))
+    fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'stdb'},
                                                                         os.path.join(workdir, f'stdb_{i}_{j}'))
     return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
